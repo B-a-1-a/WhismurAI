@@ -1,0 +1,18 @@
+# requirements.txt - Alternative without Deepgram issues
+
+pipecat-ai>=0.0.95
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+httpx>=0.25.1
+aiohttp>=3.9.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+loguru>=0.7.2
+pydantic>=2.5.0
+
+# Use AssemblyAI instead (more stable with Pipecat)
+assemblyai>=0.30.0
+
+# Or for local processing
+# openai-whisper>=20231117
