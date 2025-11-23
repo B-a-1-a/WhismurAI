@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Real-time browser tab audio translation",
   "permissions": [
+    "storage",
     "tabCapture",
     "activeTab",
     "offscreen"
