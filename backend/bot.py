@@ -10,7 +10,7 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame, TextFrame, TranscriptionFrame, LLMTextFrame, TTSTextFrame, TranslationFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame
+from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame, TextFrame, TranscriptionFrame, LLMTextFrame, TTSTextFrame, TranslationFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame, TTSAudioRawFrame, TTSStartedFrame, TTSStoppedFrame
 
 class SentenceAggregator(FrameProcessor):
     """
@@ -221,17 +221,24 @@ class FastAPIOutputTransport(BaseOutputTransport):
 
     async def process_frame(self, frame, direction):
         # Filter out frames that we don't need to handle to avoid "not registered" warnings
-        if isinstance(frame, (TextFrame, LLMTextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame)):
+        if isinstance(frame, (TextFrame, LLMTextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame, TTSStartedFrame, TTSStoppedFrame)):
             return
 
         await super().process_frame(frame, direction)
         
-        # Send audio frames to WebSocket
-        if isinstance(frame, OutputAudioRawFrame):
+        # Handle TTS audio frames by converting them to output frames
+        if isinstance(frame, TTSAudioRawFrame):
+            try:
+                print(f"[Output] Sending TTS audio chunk: {len(frame.audio)} bytes")
+                await self._websocket.send_bytes(frame.audio)
+            except Exception as e:
+                print(f"[Output] WebSocket Error sending TTS audio: {e}")
+        # Send regular output audio frames to WebSocket
+        elif isinstance(frame, OutputAudioRawFrame):
             try:
                 await self._websocket.send_bytes(frame.audio)
             except Exception as e:
-                print(f"WebSocket Output Error: {e}")
+                print(f"[Output] WebSocket Error: {e}")
 
 class FastAPITransport(BaseTransport):
     def __init__(self, websocket, params):
@@ -247,22 +254,8 @@ class FastAPITransport(BaseTransport):
 
 async def run_translation_bot(websocket_client, reference_id, target_lang):
     """
-    Run the translation pipeline with Deepgram STT -> OpenAI Translation -> Fish TTS
+    Run the TTS pipeline with Deepgram STT -> Fish TTS (skipping translation for now)
     """
-    # Map language codes to full names for better LLM understanding
-    language_names = {
-        'es': 'Spanish',
-        'fr': 'French',
-        'de': 'German',
-        'ja': 'Japanese',
-        'zh': 'Chinese',
-        'ko': 'Korean',
-        'it': 'Italian',
-        'pt': 'Portuguese'
-    }
-    
-    target_language_name = language_names.get(target_lang, target_lang)
-    
     # Custom Transport wrapping FastAPI WebSocket
     transport = FastAPITransport(
         websocket=websocket_client,
@@ -285,48 +278,55 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         encoding="linear16",
         # Enable interim results and configure endpointing to detect speech boundaries
         interim_results=True,  # Get real-time updates
-        endpointing=800,  # Wait 800ms of silence before finalizing
+        endpointing=300,  # Reduced to 300ms for faster response (was 800ms)
         smart_format=True,  # Auto-punctuation and capitalization
-        utterance_end_ms=1500,  # Detect utterance end after 1.5s gap between words
+        utterance_end_ms=1000,  # Reduced to 1s for faster finalization (was 1500ms)
         punctuate=True,  # Ensure punctuation is added for sentence detection
     )
-    print("[STT] Deepgram STT Service initialized")
+    print("[STT] Deepgram STT Service initialized with low latency settings")
     
-    llm = OpenAILLMService(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        model="gpt-4o-mini"
+    # Fish Audio TTS Service
+    fish_api_key = os.getenv("FISH_AUDIO_API_KEY")
+    if not fish_api_key:
+        print("[ERROR] FISH_AUDIO_API_KEY not found in environment variables!")
+        raise ValueError("FISH_AUDIO_API_KEY is required")
+    
+    print(f"[TTS] Initializing Fish Audio TTS with API key: {fish_api_key[:8]}...")
+    print(f"[TTS] Using voice reference ID: {reference_id}")
+    tts = FishAudioTTSService(
+        api_key=fish_api_key,
+        reference_id=reference_id,
+        sample_rate=24000,
+        # Enable latency optimization
+        latency="normal",  # Options: "normal" or "balanced" - normal is faster
     )
-    
-    messages = [
-        {
-            "role": "system",
-            "content": f"""You are a professional simultaneous interpreter. Your task:
-1. Translate each input phrase independently into {target_language_name}
-2. Output ONLY the {target_language_name} translation - no English, no explanations
-3. If the input is incomplete or unclear, translate what you can
-4. Each message is independent - do not reference previous translations
-5. Be accurate and natural in {target_language_name}"""
-        }
-    ]
-    context = OpenAILLMContext(messages)
-    context_aggregator = llm.create_context_aggregator(context)
+    print("[TTS] Fish Audio TTS Service initialized with low latency mode")
 
     # New processors
     sentence_aggregator = SentenceAggregator(websocket_client)
-    translation_sender = TranslationSender(websocket_client)
     
-    # Clear context after every message to ensure independent translation
-    context_manager = ContextManager(context, max_messages=1)
+    # TranscriptToTTS: Convert TranscriptionFrame to TTSTextFrame for Fish Audio
+    class TranscriptToTTS(FrameProcessor):
+        """Converts TranscriptionFrame to TTSTextFrame for TTS processing"""
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            
+            if isinstance(frame, TranscriptionFrame):
+                # Convert to TTS frame
+                tts_frame = TTSTextFrame(text=frame.text)
+                print(f"[TranscriptToTTS] Converting transcript to TTS: {frame.text[:50]}...")
+                await self.push_frame(tts_frame, direction)
+            else:
+                await self.push_frame(frame, direction)
+    
+    transcript_to_tts = TranscriptToTTS()
 
     pipeline = Pipeline([
         transport.input(),
         stt,
         sentence_aggregator,   # Buffer and form sentences FIRST
-        context_manager,       # Manage context based on full sentences
-        context_aggregator.user(),
-        llm,
-        translation_sender,    # Send translations to WS
-        # tts,
+        transcript_to_tts,     # Convert transcript to TTS frame
+        tts,                   # Generate audio from text
         transport.output(),
     ])
     
@@ -334,11 +334,9 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     print("  1. FastAPI Input Transport")
     print("  2. Deepgram STT")
     print("  3. Sentence Aggregator")
-    print("  4. Context Manager")
-    print("  5. LLM Context Aggregator")
-    print("  6. OpenAI LLM")
-    print("  7. Translation Sender")
-    print("  8. FastAPI Output Transport")
+    print("  4. Transcript to TTS Converter")
+    print("  5. Fish Audio TTS")
+    print("  6. FastAPI Output Transport")
 
     task = PipelineTask(
         pipeline,

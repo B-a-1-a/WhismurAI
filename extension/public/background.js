@@ -78,6 +78,36 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  if (req?.type === 'MUTE_TAB_VIDEO') {
+    // Forward mute request to content script in the specified tab
+    console.log('[Background] Forwarding MUTE_VIDEO to tab:', req.tabId);
+    chrome.tabs.sendMessage(req.tabId, { type: 'MUTE_VIDEO' })
+      .then(() => {
+        console.log('[Background] Mute message sent successfully');
+        sendResponse({ status: 'ok' });
+      })
+      .catch(err => {
+        console.error('[Background] Failed to send mute message:', err);
+        sendResponse({ status: 'error', message: err.message });
+      });
+    return true;
+  }
+
+  if (req?.type === 'UNMUTE_TAB_VIDEO') {
+    // Forward unmute request to content script in the specified tab
+    console.log('[Background] Forwarding UNMUTE_VIDEO to tab:', req.tabId);
+    chrome.tabs.sendMessage(req.tabId, { type: 'UNMUTE_VIDEO' })
+      .then(() => {
+        console.log('[Background] Unmute message sent successfully');
+        sendResponse({ status: 'ok' });
+      })
+      .catch(err => {
+        console.error('[Background] Failed to send unmute message:', err);
+        sendResponse({ status: 'error', message: err.message });
+      });
+    return true;
+  }
+
   if (req.action === "GET_STATUS") {
     sendResponse(sessionState);
     return false;
@@ -171,10 +201,10 @@ async function startCapture(targetLang) {
 
     console.log("[Background] Got stream ID:", streamId);
 
-    // Send stream ID to offscreen document
+    // Send stream ID and tab ID to offscreen document
     await sendMessageToOffscreen({
       type: 'START_CAPTURE',
-      data: { streamId, targetLang }
+      data: { streamId, targetLang, tabId: tab.id }
     });
 
   } catch (error) {

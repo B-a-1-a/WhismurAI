@@ -6,6 +6,8 @@ let workletNode = null;
 let playbackContext = null;
 let activeStream = null;
 let nextStartTime = 0; // Track when the next chunk should play
+let isPlayingAudio = false; // Track if TTS audio is currently playing
+let activeTabId = null; // Track the current tab ID for sending messages
 
 // Transcript aggregation state
 let currentTranscript = { original: '', translation: '' };
@@ -47,8 +49,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function startCapture(data) {
   try {
-    const { streamId, targetLang } = data;
-    console.log("[Offscreen] Starting capture with streamId:", streamId);
+    const { streamId, targetLang, tabId } = data;
+    console.log("[Offscreen] Starting capture with streamId:", streamId, "tabId:", tabId);
+    
+    // Store the tab ID for sending mute/unmute messages
+    activeTabId = tabId;
 
     // Get the media stream using the ID from background
     console.log("[Offscreen] Requesting getUserMedia with tab capture...");
@@ -203,9 +208,9 @@ async function connectSocket(stream, targetLang) {
         console.error("[Offscreen] Failed to parse JSON:", e);
       }
     } else {
-      // console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
-      // Audio playback disabled for debugging
-      // playPcmChunk(event.data);
+      // Received audio chunk from TTS - play it
+      console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
+      playPcmChunk(event.data);
     }
   };
 
@@ -293,6 +298,12 @@ function playPcmChunk(data) {
       playbackContext.resume();
     }
     
+    // Mute video when we start playing TTS audio
+    if (!isPlayingAudio) {
+      isPlayingAudio = true;
+      muteVideo();
+    }
+    
     if (data instanceof Blob) {
       data.arrayBuffer().then(buffer => processPcmData(buffer));
     } else if (data instanceof ArrayBuffer) {
@@ -331,4 +342,35 @@ function processPcmData(buffer) {
   
   // Advance the schedule pointer
   nextStartTime += audioBuffer.duration;
+  
+  // When audio finishes playing, unmute the video
+  source.onended = () => {
+    // Check if this is the last scheduled chunk
+    const timeSinceLastScheduled = playbackContext.currentTime - nextStartTime;
+    if (timeSinceLastScheduled >= -0.1) { // Small tolerance
+      console.log('[Offscreen] TTS audio finished, unmuting video');
+      isPlayingAudio = false;
+      unmuteVideo();
+    }
+  };
+}
+
+function muteVideo() {
+  if (activeTabId) {
+    console.log('[Offscreen] Sending MUTE_VIDEO message to tab:', activeTabId);
+    chrome.runtime.sendMessage({
+      type: 'MUTE_TAB_VIDEO',
+      tabId: activeTabId
+    }).catch(err => console.warn('[Offscreen] Failed to send mute request:', err));
+  }
+}
+
+function unmuteVideo() {
+  if (activeTabId) {
+    console.log('[Offscreen] Sending UNMUTE_VIDEO message to tab:', activeTabId);
+    chrome.runtime.sendMessage({
+      type: 'UNMUTE_TAB_VIDEO',
+      tabId: activeTabId
+    }).catch(err => console.warn('[Offscreen] Failed to send unmute request:', err));
+  }
 }
