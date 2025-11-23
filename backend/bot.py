@@ -4,7 +4,7 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.fish.tts import FishAudioTTSService
-from pipecat.transports.network.websocket_server import WebSocketServerTransport, WebSocketServerParams
+from pipecat.transports.websocket.server import WebsocketServerTransport, WebsocketServerParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
 async def run_translation_bot(websocket_client, reference_id, target_lang):
@@ -17,8 +17,8 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         target_lang: Target language code (e.g., 'es', 'fr', 'de', 'ja')
     """
     # Input: 16kHz (from Extension), Output: 24kHz (Fish Audio default)
-    transport = WebSocketServerTransport(
-        params=WebSocketServerParams(
+    transport = WebsocketServerTransport(
+        params=WebsocketServerParams(
             audio_in_sample_rate=16000,
             audio_out_sample_rate=24000,
             add_wav_header=False
