@@ -1,7 +1,7 @@
 import os
 import asyncio
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.task import PipelineTask
+from pipecat.pipeline.task import PipelineTask, PipelineParams
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.fish.tts import FishAudioTTSService
@@ -9,7 +9,7 @@ from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
-from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame, FrameDirection
+from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame
 
 class FastAPIInputTransport(BaseInputTransport):
     def __init__(self, websocket, params):
@@ -57,7 +57,7 @@ class FastAPIOutputTransport(BaseOutputTransport):
 
 class FastAPITransport(BaseTransport):
     def __init__(self, websocket, params):
-        super().__init__(params)
+        super().__init__()
         self._input = FastAPIInputTransport(websocket, params)
         self._output = FastAPIOutputTransport(websocket, params)
 
@@ -111,6 +111,13 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         transport.output(),
     ])
 
-    task = PipelineTask(pipeline)
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            allow_interruptions=True,
+            enable_metrics=True,
+            enable_usage_metrics=True,
+        )
+    )
     # No setup needed for custom transport as we handle it in init
     await task.run()
