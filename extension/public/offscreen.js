@@ -50,6 +50,12 @@ async function startCapture(data) {
     // Store the tab ID for sending mute/unmute messages
     activeTabId = tabId;
 
+    // Ensure video/audio is unmuted when starting (in case it was muted from previous session)
+    console.log(
+      "[Offscreen] Ensuring video/audio is unmuted at session start..."
+    );
+    unmuteVideo();
+
     // Get the media stream using the ID from background
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -113,11 +119,17 @@ function connectSocket(stream, targetLang) {
 
   socket.onmessage = (event) => {
     // Handle both binary audio and JSON transcript messages
-    if (event.data instanceof ArrayBuffer) {
-      // Binary audio data
+    // Check for binary audio first (ArrayBuffer or Blob)
+    if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+      // Binary audio data from TTS
+      const size =
+        event.data instanceof ArrayBuffer
+          ? event.data.byteLength
+          : event.data.size;
       console.log(
-        "[Offscreen] Received audio chunk, size:",
-        event.data.byteLength
+        "[Offscreen] 🎵 Received TTS audio chunk, size:",
+        size,
+        "bytes"
       );
       playPcmChunk(event.data);
     } else if (typeof event.data === "string") {
@@ -239,12 +251,12 @@ function connectSocket(stream, targetLang) {
         console.error("[Offscreen] Failed to parse transcript message:", e);
       }
     } else {
-      // Received audio chunk from TTS - play it
-      console.log(
-        "[Offscreen] Received audio chunk, size:",
-        event.data.byteLength
+      // Unexpected data type - log for debugging
+      console.warn(
+        "[Offscreen] Received unexpected data type:",
+        typeof event.data,
+        event.data
       );
-      playPcmChunk(event.data);
     }
   };
 
@@ -293,10 +305,12 @@ function playPcmChunk(data) {
   try {
     if (!playbackContext) {
       playbackContext = new AudioContext({ sampleRate: 24000 });
+      console.log("[Offscreen] 🎚️ Created new AudioContext for TTS playback");
     }
 
     if (playbackContext.state === "suspended") {
       playbackContext.resume();
+      console.log("[Offscreen] 🎚️ Resumed AudioContext");
     }
 
     // Track that we're playing TTS audio (but don't mute original audio)
@@ -308,76 +322,113 @@ function playPcmChunk(data) {
       // Removed muteVideo() call - keep original audio playing
     }
 
+    // Handle both Blob and ArrayBuffer
     if (data instanceof Blob) {
-      data.arrayBuffer().then((buffer) => processPcmData(buffer));
+      data
+        .arrayBuffer()
+        .then((buffer) => {
+          console.log(
+            "[Offscreen] 🎵 Processing Blob audio, size:",
+            buffer.byteLength
+          );
+          processPcmData(buffer);
+        })
+        .catch((err) => {
+          console.error(
+            "[Offscreen] Error converting Blob to ArrayBuffer:",
+            err
+          );
+        });
     } else if (data instanceof ArrayBuffer) {
+      console.log(
+        "[Offscreen] 🎵 Processing ArrayBuffer audio, size:",
+        data.byteLength
+      );
       processPcmData(data);
+    } else {
+      console.error(
+        "[Offscreen] ❌ Invalid audio data type:",
+        typeof data,
+        data
+      );
     }
   } catch (error) {
-    console.error("[Offscreen] Playback error:", error);
+    console.error("[Offscreen] ❌ Playback error:", error);
   }
 }
 
 function processPcmData(buffer) {
-  const int16Array = new Int16Array(buffer);
-  const float32Array = new Float32Array(int16Array.length);
+  try {
+    const int16Array = new Int16Array(buffer);
+    const float32Array = new Float32Array(int16Array.length);
 
-  // Convert PCM to float
-  for (let i = 0; i < int16Array.length; i++) {
-    float32Array[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7fff);
-  }
-
-  // Create STEREO buffer (2 channels) so audio plays in both speakers
-  const audioBuffer = playbackContext.createBuffer(
-    2,
-    float32Array.length,
-    playbackContext.sampleRate
-  );
-
-  // Copy the mono audio to both left (0) and right (1) channels
-  audioBuffer.getChannelData(0).set(float32Array); // Left channel
-  audioBuffer.getChannelData(1).set(float32Array); // Right channel
-
-  const source = playbackContext.createBufferSource();
-  source.buffer = audioBuffer;
-
-  // Speed up playback by 1.25x for better responsiveness
-  source.playbackRate.value = 1.25;
-
-  source.connect(playbackContext.destination);
-
-  // Schedule playback to avoid overlap and gaps
-  const currentTime = playbackContext.currentTime;
-
-  // If nextStartTime is in the past (we fell behind or just started), reset to now
-  // Adding a small buffer (0.05s) allows for smoother startup
-  if (nextStartTime < currentTime) {
-    nextStartTime = currentTime + 0.05;
-  }
-
-  source.start(nextStartTime);
-
-  // Advance the schedule pointer (adjusted for playback rate)
-  // At 1.25x speed, audio takes less time to play
-  nextStartTime += audioBuffer.duration / 1.25;
-
-  // When audio finishes playing, track state
-  source.onended = () => {
-    // Check if this is the last scheduled chunk
-    const timeSinceLastScheduled = playbackContext.currentTime - nextStartTime;
-    console.log(
-      "[Offscreen] Audio chunk ended, timeSinceLastScheduled:",
-      timeSinceLastScheduled
-    );
-    if (timeSinceLastScheduled >= -0.1) {
-      // Small tolerance
-      console.log("[Offscreen] 🎵 Last TTS audio chunk finished");
-      isPlayingAudio = false;
-      // Original audio continues playing - no unmute needed
-    } else {
-      console.log("[Offscreen] More audio chunks pending");
+    // Convert PCM to float
+    for (let i = 0; i < int16Array.length; i++) {
+      float32Array[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7fff);
     }
-  };
+
+    // Create STEREO buffer (2 channels) so audio plays in both speakers
+    const audioBuffer = playbackContext.createBuffer(
+      2,
+      float32Array.length,
+      playbackContext.sampleRate
+    );
+
+    // Copy the mono audio to both left (0) and right (1) channels
+    audioBuffer.getChannelData(0).set(float32Array); // Left channel
+    audioBuffer.getChannelData(1).set(float32Array); // Right channel
+
+    const source = playbackContext.createBufferSource();
+    source.buffer = audioBuffer;
+
+    // Speed up playback by 1.25x for better responsiveness
+    source.playbackRate.value = 1.25;
+
+    source.connect(playbackContext.destination);
+
+    console.log(
+      "[Offscreen] 🎵 Scheduling audio playback:",
+      audioBuffer.duration.toFixed(3),
+      "seconds, sample rate:",
+      playbackContext.sampleRate
+    );
+
+    // Schedule playback to avoid overlap and gaps
+    const currentTime = playbackContext.currentTime;
+
+    // If nextStartTime is in the past (we fell behind or just started), reset to now
+    // Adding a small buffer (0.05s) allows for smoother startup
+    if (nextStartTime < currentTime) {
+      nextStartTime = currentTime + 0.05;
+    }
+
+    source.start(nextStartTime);
+
+    // Advance the schedule pointer (adjusted for playback rate)
+    // At 1.25x speed, audio takes less time to play
+    nextStartTime += audioBuffer.duration / 1.25;
+
+    // When audio finishes playing, track state
+    source.onended = () => {
+      // Check if this is the last scheduled chunk
+      const timeSinceLastScheduled =
+        playbackContext.currentTime - nextStartTime;
+      console.log(
+        "[Offscreen] Audio chunk ended, timeSinceLastScheduled:",
+        timeSinceLastScheduled
+      );
+      if (timeSinceLastScheduled >= -0.1) {
+        // Small tolerance
+        console.log("[Offscreen] 🎵 Last TTS audio chunk finished");
+        isPlayingAudio = false;
+        // Original audio continues playing - no unmute needed
+      } else {
+        console.log("[Offscreen] More audio chunks pending");
+      }
+    };
+  } catch (error) {
+    console.error("[Offscreen] ❌ Error processing PCM data:", error);
+  }
 }
 
 function muteVideo() {
