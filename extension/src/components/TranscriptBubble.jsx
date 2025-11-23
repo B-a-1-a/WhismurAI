@@ -1,6 +1,6 @@
 import { Avatar, AvatarFallback } from "./ui/avatar";
 
-export function TranscriptBubble({ transcript, viewMode }) {
+export function TranscriptBubble({ transcript }) {
   return (
     <div
       className={`flex items-start gap-3 p-3 rounded-xl transition-all duration-300 ${
@@ -26,23 +26,9 @@ export function TranscriptBubble({ transcript, viewMode }) {
           {transcript.isNew && <div className="w-2 h-2 bg-[#00C4A7] rounded-full animate-pulse" />}
         </div>
 
-        {viewMode === "dual" ? (
-          <div className="space-y-2">
-            <p className="text-[#1A1A1A]" style={{ fontSize: "14px", lineHeight: 1.6 }}>
-              {transcript.original}
-            </p>
-            <p
-              className="text-[#9CA3AF] italic"
-              style={{ fontSize: "13px", lineHeight: 1.6 }}
-            >
-              {transcript.translated}
-            </p>
-          </div>
-        ) : (
-          <p className="text-[#1A1A1A]" style={{ fontSize: "14px", lineHeight: 1.6 }}>
-            {transcript.translated}
-          </p>
-        )}
+        <p className="text-[#1A1A1A]" style={{ fontSize: "14px", lineHeight: 1.6 }}>
+          {transcript.text}
+        </p>
       </div>
     </div>
   );

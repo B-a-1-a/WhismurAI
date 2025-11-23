@@ -82,8 +82,26 @@ function connectSocket(stream, targetLang) {
   };
   
   socket.onmessage = (event) => {
-    console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
-    playPcmChunk(event.data);
+    // Handle both binary audio and JSON transcript messages
+    if (event.data instanceof ArrayBuffer) {
+      // Binary audio data
+      console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
+      playPcmChunk(event.data);
+    } else if (typeof event.data === 'string') {
+      // JSON transcript message
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'transcript') {
+          // Forward transcript to background script, which will forward to popup
+          chrome.runtime.sendMessage({
+            type: 'TRANSCRIPT_MESSAGE',
+            data: message
+          });
+        }
+      } catch (e) {
+        console.error("[Offscreen] Failed to parse transcript message:", e);
+      }
+    }
   };
 
   socket.onerror = (err) => console.error("[Offscreen] WS Error:", err);

@@ -2,7 +2,7 @@
 
 let isOffscreenCreated = false;
 
-// Listen for messages from React UI
+// Listen for messages from React UI and offscreen document
 chrome.runtime.onMessage.addListener(async (req, sender, sendResponse) => {
   if (req.action === "START_SESSION") {
     await setupOffscreenDocument("offscreen.html");
@@ -11,6 +11,15 @@ chrome.runtime.onMessage.addListener(async (req, sender, sendResponse) => {
   } else if (req.action === "STOP_SESSION") {
     stopCapture();
     sendResponse({ status: "stopped" });
+  } else if (req.type === "TRANSCRIPT_MESSAGE") {
+    // Forward transcript messages from offscreen to popup
+    // The popup will listen for these messages
+    chrome.runtime.sendMessage({
+      type: "TRANSCRIPT_UPDATE",
+      data: req.data
+    }).catch(() => {
+      // Popup might not be open, ignore error
+    });
   }
   return true;
 });
