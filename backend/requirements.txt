@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pipecat-ai[fish,deepgram,openai]
+python-dotenv
+fish-audio-sdk
+python-multipart
+requests
+websockets
+
