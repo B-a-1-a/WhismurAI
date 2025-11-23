@@ -8,106 +8,110 @@ let mutedVideos = new WeakMap(); // Store original state per video element
 
 // Notify background that content script is ready
 chrome.runtime.sendMessage({ type: 'CONTENT_SCRIPT_READY', url: window.location.href })
-  .catch(err => console.warn('[Content] Failed to notify ready:', err));
+  .catch(err => {}); // Ignore errors (expected in some iframe contexts)
 
 // Listen for messages from background/offscreen
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[Content] Received message:', message.type, 'Current videos on page:', document.querySelectorAll('video').length);
+  // Only log in top frame to avoid spam, unless verbose debugging needed
+  if (window === top) {
+    console.log('[Content] Received message:', message.type, 'Current media on page:', document.querySelectorAll('video, audio').length);
+  }
   
   if (message.type === 'MUTE_VIDEO') {
-    const result = muteAllVideos();
-    console.log('[Content] Mute result:', result);
+    const result = muteAllMedia();
     sendResponse(result);
   } else if (message.type === 'UNMUTE_VIDEO') {
-    const result = unmuteAllVideos();
-    console.log('[Content] Unmute result:', result);
+    const result = unmuteAllMedia();
     sendResponse(result);
   }
   
   return false;
 });
 
-function muteAllVideos() {
-  const videos = document.querySelectorAll('video');
-  console.log('[Content] Attempting to mute', videos.length, 'video(s)');
-  console.log('[Content] Document ready state:', document.readyState);
-  console.log('[Content] Current URL:', window.location.href);
+function muteAllMedia() {
+  // SEARCH FOR BOTH VIDEO AND AUDIO ELEMENTS
+  const mediaElements = document.querySelectorAll('video, audio');
   
-  if (videos.length === 0) {
-    console.warn('[Content] ⚠️ No video elements found on the page!');
-    console.warn('[Content] DOM may not be ready yet. Trying again in 500ms...');
-    
-    // Try again after a delay
+  if (mediaElements.length === 0) {
+    // Don't warn to avoid spamming console from every ad iframe
+    // Just retry silently once
     setTimeout(() => {
-      const retryVideos = document.querySelectorAll('video');
-      console.log('[Content] Retry found', retryVideos.length, 'video(s)');
-      if (retryVideos.length > 0) {
-        retryVideos.forEach(muteVideo);
+      const retryElements = document.querySelectorAll('video, audio');
+      if (retryElements.length > 0) {
+        retryElements.forEach(muteElement);
         isMuted = true;
       }
-    }, 500);
+    }, 1000);
     
-    return { status: 'no_videos', count: 0 };
+    return { status: 'no_media', count: 0 };
   }
   
-  videos.forEach((video, index) => {
-    muteVideo(video);
-    console.log(`[Content] ✅ Muted video ${index + 1}/${videos.length}`);
+  mediaElements.forEach((element) => {
+    muteElement(element);
   });
   
   isMuted = true;
-  return { status: 'muted', count: videos.length };
+  return { status: 'muted', count: mediaElements.length };
 }
 
-function muteVideo(video) {
-  // Store original state only if not already muted by us
-  if (!mutedVideos.has(video)) {
-    mutedVideos.set(video, {
-      muted: video.muted,
-      volume: video.volume
+function muteElement(element) {
+  // Store original state
+  if (!mutedVideos.has(element)) {
+    mutedVideos.set(element, {
+      muted: element.muted,
+      volume: element.volume
     });
-    console.log('[Content] 💾 Stored original state:', { muted: video.muted, volume: video.volume, src: video.currentSrc?.substring(0, 50) });
+    // console.log('[Content] 💾 Stored state for:', element.tagName);
   }
   
-  video.muted = true;
-  video.volume = 0;
+  // Mute
+  element.muted = true;
+  element.volume = 0;
+  
+  // Force audio refresh
+  const wasPlaying = !element.paused;
+  if (wasPlaying) {
+    const currentTime = element.currentTime;
+    element.pause();
+    setTimeout(() => {
+      element.currentTime = currentTime;
+      element.play().catch(e => {});
+    }, 10);
+  }
 }
 
-function unmuteAllVideos() {
-  const videos = document.querySelectorAll('video');
-  console.log('[Content] Attempting to unmute', videos.length, 'video(s)');
-  
+function unmuteAllMedia() {
+  const mediaElements = document.querySelectorAll('video, audio');
   let unmuteCount = 0;
-  videos.forEach((video, index) => {
-    // Restore original state if we have it
-    const originalState = mutedVideos.get(video);
+  
+  mediaElements.forEach((element) => {
+    const originalState = mutedVideos.get(element);
     if (originalState) {
-      video.muted = originalState.muted;
-      video.volume = originalState.volume;
-      mutedVideos.delete(video);
+      element.muted = originalState.muted;
+      element.volume = originalState.volume;
+      
+      // Force refresh
+      if (!element.paused) {
+        element.pause();
+        setTimeout(() => element.play().catch(e => {}), 10);
+      }
+      
+      mutedVideos.delete(element);
       unmuteCount++;
-      console.log(`[Content] ✅ Restored video ${index + 1}/${videos.length}:`, originalState);
     }
   });
   
   isMuted = false;
-  console.log(`[Content] Unmuted ${unmuteCount} video(s)`);
   return { status: 'unmuted', count: unmuteCount };
 }
 
-// Observe for dynamically added video elements
+// Update Observer to look for both
 const observer = new MutationObserver((mutations) => {
   if (isMuted) {
-    const videos = document.querySelectorAll('video');
-    videos.forEach((video) => {
-      if (!mutedVideos.has(video)) {
-        mutedVideos.set(video, {
-          muted: video.muted,
-          volume: video.volume
-        });
-        video.muted = true;
-        video.volume = 0;
-        console.log('[Content] Muted newly added video');
+    const mediaElements = document.querySelectorAll('video, audio');
+    mediaElements.forEach((element) => {
+      if (!mutedVideos.has(element)) {
+        muteElement(element);
       }
     });
   }
@@ -130,6 +134,5 @@ if (document.body) {
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
-  unmuteAllVideos();
+  unmuteAllMedia();
 });
-

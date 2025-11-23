@@ -44,6 +44,8 @@ let sessionState = {
   targetLang: 'es'
 };
 
+let capturedTabId = null; // Track which tab is being captured
+
 // Listen for messages from React UI and Offscreen document
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   if (req?.type === 'OFFSCREEN_READY') {
@@ -186,6 +188,7 @@ async function startCapture(targetLang) {
     }
 
     console.log("[Background] Capturing audio from tab:", tab.id);
+    capturedTabId = tab.id; // Store tab ID for later unmuting
     
     const streamId = await new Promise((resolve, reject) => {
       // targetTabId: The tab we want to capture
@@ -224,6 +227,15 @@ async function stopCapture() {
   await sendMessageToOffscreen({ type: 'STOP_CAPTURE' }).catch((error) => {
     console.log("[Background] Failed to send stop message (offscreen may be closed):", error);
   });
+  
+  // Unmute the video in the captured tab
+  if (capturedTabId) {
+    console.log("[Background] Unmuting video in tab:", capturedTabId);
+    chrome.tabs.sendMessage(capturedTabId, { type: 'UNMUTE_VIDEO' })
+      .then(() => console.log("[Background] Unmute command sent"))
+      .catch(err => console.warn("[Background] Failed to unmute tab:", err));
+    capturedTabId = null;
+  }
   
   // Close offscreen document
   if (isOffscreenCreated) {

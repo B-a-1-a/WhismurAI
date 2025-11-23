@@ -298,9 +298,9 @@ function playPcmChunk(data) {
       playbackContext.resume();
     }
     
-    // Mute video when we start playing TTS audio
+    // Mute video when we start playing TTS audio (if not already muted)
     if (!isPlayingAudio) {
-      console.log('[Offscreen] 🎵 First TTS audio chunk, muting video...');
+      console.log('[Offscreen] 🎵 First TTS audio chunk, ensuring video is muted...');
       isPlayingAudio = true;
       muteVideo();
     }
@@ -319,15 +319,24 @@ function processPcmData(buffer) {
   const int16Array = new Int16Array(buffer);
   const float32Array = new Float32Array(int16Array.length);
   
+  // Convert PCM to float
   for (let i = 0; i < int16Array.length; i++) {
     float32Array[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
   }
   
-  const audioBuffer = playbackContext.createBuffer(1, float32Array.length, playbackContext.sampleRate);
-  audioBuffer.getChannelData(0).set(float32Array);
+  // Create STEREO buffer (2 channels) so audio plays in both speakers
+  const audioBuffer = playbackContext.createBuffer(2, float32Array.length, playbackContext.sampleRate);
+  
+  // Copy the mono audio to both left (0) and right (1) channels
+  audioBuffer.getChannelData(0).set(float32Array); // Left channel
+  audioBuffer.getChannelData(1).set(float32Array); // Right channel
   
   const source = playbackContext.createBufferSource();
   source.buffer = audioBuffer;
+  
+  // Speed up playback by 1.25x for better responsiveness
+  source.playbackRate.value = 1.25;
+  
   source.connect(playbackContext.destination);
   
   // Schedule playback to avoid overlap and gaps
@@ -341,8 +350,9 @@ function processPcmData(buffer) {
   
   source.start(nextStartTime);
   
-  // Advance the schedule pointer
-  nextStartTime += audioBuffer.duration;
+  // Advance the schedule pointer (adjusted for playback rate)
+  // At 1.25x speed, audio takes less time to play
+  nextStartTime += audioBuffer.duration / 1.25;
   
   // When audio finishes playing, unmute the video
   source.onended = () => {
@@ -350,11 +360,11 @@ function processPcmData(buffer) {
     const timeSinceLastScheduled = playbackContext.currentTime - nextStartTime;
     console.log('[Offscreen] Audio chunk ended, timeSinceLastScheduled:', timeSinceLastScheduled);
     if (timeSinceLastScheduled >= -0.1) { // Small tolerance
-      console.log('[Offscreen] 🎵 Last TTS audio chunk finished, unmuting video');
+      console.log('[Offscreen] 🎵 Last TTS audio chunk finished');
       isPlayingAudio = false;
-      unmuteVideo();
+      // REMOVED: unmuteVideo(); -> We now keep video muted until session ends
     } else {
-      console.log('[Offscreen] More audio chunks pending, keeping video muted');
+      console.log('[Offscreen] More audio chunks pending');
     }
   };
 }
