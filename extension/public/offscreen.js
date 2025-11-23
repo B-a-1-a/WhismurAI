@@ -300,6 +300,7 @@ function playPcmChunk(data) {
     
     // Mute video when we start playing TTS audio
     if (!isPlayingAudio) {
+      console.log('[Offscreen] 🎵 First TTS audio chunk, muting video...');
       isPlayingAudio = true;
       muteVideo();
     }
@@ -347,30 +348,47 @@ function processPcmData(buffer) {
   source.onended = () => {
     // Check if this is the last scheduled chunk
     const timeSinceLastScheduled = playbackContext.currentTime - nextStartTime;
+    console.log('[Offscreen] Audio chunk ended, timeSinceLastScheduled:', timeSinceLastScheduled);
     if (timeSinceLastScheduled >= -0.1) { // Small tolerance
-      console.log('[Offscreen] TTS audio finished, unmuting video');
+      console.log('[Offscreen] 🎵 Last TTS audio chunk finished, unmuting video');
       isPlayingAudio = false;
       unmuteVideo();
+    } else {
+      console.log('[Offscreen] More audio chunks pending, keeping video muted');
     }
   };
 }
 
 function muteVideo() {
+  console.log('[Offscreen] 🔇 muteVideo() called, activeTabId:', activeTabId);
   if (activeTabId) {
-    console.log('[Offscreen] Sending MUTE_VIDEO message to tab:', activeTabId);
+    console.log('[Offscreen] Sending MUTE_TAB_VIDEO message to background for tab:', activeTabId);
     chrome.runtime.sendMessage({
       type: 'MUTE_TAB_VIDEO',
       tabId: activeTabId
-    }).catch(err => console.warn('[Offscreen] Failed to send mute request:', err));
+    }).then(response => {
+      console.log('[Offscreen] ✅ Mute message acknowledged:', response);
+    }).catch(err => {
+      console.error('[Offscreen] ❌ Failed to send mute request:', err);
+    });
+  } else {
+    console.error('[Offscreen] ❌ Cannot mute: activeTabId is not set!');
   }
 }
 
 function unmuteVideo() {
+  console.log('[Offscreen] 🔊 unmuteVideo() called, activeTabId:', activeTabId);
   if (activeTabId) {
-    console.log('[Offscreen] Sending UNMUTE_VIDEO message to tab:', activeTabId);
+    console.log('[Offscreen] Sending UNMUTE_TAB_VIDEO message to background for tab:', activeTabId);
     chrome.runtime.sendMessage({
       type: 'UNMUTE_TAB_VIDEO',
       tabId: activeTabId
-    }).catch(err => console.warn('[Offscreen] Failed to send unmute request:', err));
+    }).then(response => {
+      console.log('[Offscreen] ✅ Unmute message acknowledged:', response);
+    }).catch(err => {
+      console.error('[Offscreen] ❌ Failed to send unmute request:', err);
+    });
+  } else {
+    console.error('[Offscreen] ❌ Cannot unmute: activeTabId is not set!');
   }
 }
