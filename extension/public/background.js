@@ -42,7 +42,9 @@ async function startCapture(targetLang) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
     const streamId = await new Promise((resolve, reject) => {
-      chrome.tabCapture.getMediaStreamId({ consumerTabId: tab.id }, (streamId) => {
+      // targetTabId: The tab we want to capture
+      // consumerTabId: Omitted so it defaults to this extension (allowing offscreen doc to consume)
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (streamId) => {
         if (chrome.runtime.lastError) {
           reject(chrome.runtime.lastError);
         } else {

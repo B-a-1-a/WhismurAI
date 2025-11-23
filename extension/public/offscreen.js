@@ -74,6 +74,7 @@ function connectSocket(stream, targetLang) {
   console.log("[Offscreen] Connecting to:", url);
   
   socket = new WebSocket(url);
+  socket.binaryType = 'arraybuffer';
   
   socket.onopen = () => {
     console.log("[Offscreen] WebSocket connected");
@@ -81,6 +82,7 @@ function connectSocket(stream, targetLang) {
   };
   
   socket.onmessage = (event) => {
+    console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
     playPcmChunk(event.data);
   };
 
@@ -89,6 +91,8 @@ function connectSocket(stream, targetLang) {
 
 function setupAudioProcessing(stream, ws) {
   audioContext = new AudioContext({ sampleRate: 16000 });
+  console.log("[Offscreen] AudioContext sample rate:", audioContext.sampleRate);
+  
   const source = audioContext.createMediaStreamSource(stream);
   processor = audioContext.createScriptProcessor(4096, 1, 1);
   
@@ -98,6 +102,13 @@ function setupAudioProcessing(stream, ws) {
   processor.onaudioprocess = (e) => {
     if (ws.readyState === WebSocket.OPEN) {
       const inputData = e.inputBuffer.getChannelData(0);
+      
+      // Simple silence detection logging (once every ~100 chunks to avoid spam)
+      if (Math.random() < 0.01) {
+         const maxVal = inputData.reduce((max, v) => Math.max(max, Math.abs(v)), 0);
+         console.log(`[Offscreen] Audio level (peak): ${maxVal.toFixed(4)}`);
+      }
+
       const pcmData = floatTo16BitPCM(inputData);
       ws.send(pcmData);
     }
@@ -117,6 +128,10 @@ function playPcmChunk(data) {
   try {
     if (!playbackContext) {
       playbackContext = new AudioContext({ sampleRate: 24000 });
+    }
+    
+    if (playbackContext.state === 'suspended') {
+      playbackContext.resume();
     }
     
     if (data instanceof Blob) {
