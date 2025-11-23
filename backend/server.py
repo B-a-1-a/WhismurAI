@@ -1,11 +1,17 @@
 import os
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from openai import OpenAI
 from bot import run_translation_bot
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Initialize OpenAI client
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI(title="Live Translation Backend")
 
@@ -22,14 +28,87 @@ app.add_middleware(
 DEFAULT_VOICE_ID = "74ca9f592dcf4185a586df5d57ec8c4f"
 
 
+class SummarizeRequest(BaseModel):
+    transcripts: list[str]
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
     return {
         "status": "running",
         "service": "Live Translation Backend",
-        "endpoints": {"websocket": "/ws/translate/{target_lang}"},
+        "endpoints": {
+            "websocket": "/ws/translate/{target_lang}",
+            "summarize": "/api/summarize",
+        },
     }
+
+
+@app.post("/api/summarize")
+async def summarize_transcripts(request: SummarizeRequest):
+    """
+    Summarize transcripts into key insightful points using GPT-4o-mini
+    """
+    try:
+        # Combine all transcripts into a single text
+        full_text = "\n".join(request.transcripts)
+
+        if not full_text.strip():
+            return JSONResponse(
+                status_code=400, content={"error": "No transcripts provided"}
+            )
+
+        # Create prompt for summarization
+        prompt = f"""Analyze the following transcript and create a comprehensive summary with key insightful points.
+
+Transcript:
+{full_text}
+
+Please provide:
+1. A brief session summary (2-3 sentences)
+2. Key insightful points (bullet points highlighting important information, insights, and takeaways)
+3. Action items (if any tasks or follow-ups are mentioned)
+
+Format your response as JSON with the following structure:
+{{
+  "summary": "Brief summary text",
+  "keyPoints": ["point 1", "point 2", "point 3"],
+  "actionItems": ["action 1", "action 2"]
+}}"""
+
+        # Call OpenAI API
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert at analyzing transcripts and extracting key insights, important points, and action items. Always respond with valid JSON.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=1000,
+        )
+
+        # Extract the response
+        summary_text = response.choices[0].message.content
+
+        # Try to parse as JSON, if it fails return as text
+        import json
+
+        try:
+            summary_data = json.loads(summary_text)
+            return summary_data
+        except json.JSONDecodeError:
+            # If not valid JSON, return as structured text
+            return {"summary": summary_text, "keyPoints": [], "actionItems": []}
+
+    except Exception as e:
+        print(f"[Summarize] Error: {e}")
+        return JSONResponse(
+            status_code=500, content={"error": f"Failed to generate summary: {str(e)}"}
+        )
 
 
 @app.websocket("/ws/translate/{target_lang}")

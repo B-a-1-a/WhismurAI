@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FileText, Mic, StickyNote } from "lucide-react";
 
 import "./index.css";
@@ -12,12 +12,30 @@ function App() {
   const [activeTab, setActiveTab] = useState("home");
   const [isTranslating, setIsTranslating] = useState(false);
   const [showFloatingOverlay, setShowFloatingOverlay] = useState(false);
-
-  const handleClear = () => {
-    chrome.storage.local.set({ transcripts: [] });
-    setTranscripts([]);
-    setInterimTranscript(null);
-  };
+  const [transcripts, setTranscripts] = useState([]);
+  
+  // Load cached transcripts on mount
+  useEffect(() => {
+    if (chrome.storage) {
+      chrome.storage.local.get(["cachedTranscripts"], (result) => {
+        if (result.cachedTranscripts && Array.isArray(result.cachedTranscripts)) {
+          setTranscripts(result.cachedTranscripts);
+        }
+      });
+    }
+  }, []);
+  
+  // Listen for custom event to switch to notes tab
+  useEffect(() => {
+    const handleShowNotes = () => {
+      setActiveTab("notes");
+    };
+    
+    window.addEventListener("showNotesTab", handleShowNotes);
+    return () => {
+      window.removeEventListener("showNotesTab", handleShowNotes);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#FAFAFA] relative">
@@ -95,16 +113,22 @@ function App() {
               <PopupHome
                 isTranslating={isTranslating}
                 setIsTranslating={setIsTranslating}
+                transcripts={transcripts}
+                setTranscripts={setTranscripts}
                 setShowFloatingOverlay={setShowFloatingOverlay}
               />
             </TabsContent>
 
             <TabsContent value="transcript" className="m-0">
-              <LiveTranscript isTranslating={isTranslating} />
+              <LiveTranscript 
+                isTranslating={isTranslating} 
+                transcripts={transcripts}
+                setTranscripts={setTranscripts}
+              />
             </TabsContent>
 
             <TabsContent value="notes" className="m-0">
-              <NotesSummary isTranslating={isTranslating} />
+              <NotesSummary isTranslating={isTranslating} transcripts={transcripts} />
             </TabsContent>
           </Tabs>
         </div>
