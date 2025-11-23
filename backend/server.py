@@ -36,24 +36,41 @@ async def root():
 async def websocket_endpoint(websocket: WebSocket, target_lang: str):
     """
     WebSocket endpoint for real-time translation
-    
+
     Args:
         target_lang: Target language code (e.g., 'es', 'fr', 'de', 'ja')
-    
+
     Query Parameters:
         reference_id: Optional Fish Audio voice ID (defaults to DEFAULT_VOICE_ID)
+        stt: STT service to use - "deepgram" (default, fastest) or "whisper"
+        diarization: Enable speaker diarization - "true" or "false" (default)
     """
     await websocket.accept()
-    
+
     # Get voice reference ID from query params, or use default
     ref_id = websocket.query_params.get("reference_id", DEFAULT_VOICE_ID)
-    
+
+    # Get STT service preference (default to Deepgram for lowest latency)
+    stt_service = websocket.query_params.get("stt", "deepgram").lower()
+    use_whisper = (stt_service == "whisper")
+
+    # Get diarization preference (default to False)
+    enable_diarization = websocket.query_params.get("diarization", "false").lower() == "true"
+
     print(f"[WebSocket] Starting translation pipeline")
     print(f"[WebSocket] Target Language: {target_lang}")
     print(f"[WebSocket] Voice ID: {ref_id}")
-    
+    print(f"[WebSocket] STT Service: {'Whisper (local)' if use_whisper else 'Deepgram (cloud)'}")
+    print(f"[WebSocket] Speaker Diarization: {'Enabled' if enable_diarization else 'Disabled'}")
+
     try:
-        await run_translation_bot(websocket, ref_id, target_lang)
+        await run_translation_bot(
+            websocket,
+            ref_id,
+            target_lang,
+            use_whisper=use_whisper,
+            enable_diarization=enable_diarization
+        )
     except Exception as e:
         print(f"[WebSocket] Error: {e}")
         await websocket.close()

@@ -6,4 +6,10 @@ fish-audio-sdk
 python-multipart
 requests
 websockets
+openai-whisper
+pyannote.audio
+torch
+torchaudio
+numpy
+scipy
 

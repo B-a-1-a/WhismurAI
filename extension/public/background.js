@@ -2,15 +2,31 @@
 
 let isOffscreenCreated = false;
 
+console.log("[Background] Service worker started");
+
 // Listen for messages from React UI
 chrome.runtime.onMessage.addListener(async (req, sender, sendResponse) => {
+  console.log("[Background] Received message:", req);
+
   if (req.action === "START_SESSION") {
-    await setupOffscreenDocument("offscreen.html");
-    startCapture(req.targetLang);
-    sendResponse({ status: "started" });
+    console.log("[Background] Starting session with target language:", req.targetLang);
+    try {
+      await setupOffscreenDocument("offscreen.html");
+      await startCapture(req.targetLang);
+      sendResponse({ status: "started" });
+    } catch (error) {
+      console.error("[Background] Error starting session:", error);
+      sendResponse({ status: "error", error: error.message });
+    }
   } else if (req.action === "STOP_SESSION") {
-    stopCapture();
-    sendResponse({ status: "stopped" });
+    console.log("[Background] Stopping session");
+    try {
+      await stopCapture();
+      sendResponse({ status: "stopped" });
+    } catch (error) {
+      console.error("[Background] Error stopping session:", error);
+      sendResponse({ status: "error", error: error.message });
+    }
   }
   return true;
 });

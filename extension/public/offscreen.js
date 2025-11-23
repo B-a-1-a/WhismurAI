@@ -5,6 +5,7 @@ let audioContext = null;
 let processor = null;
 let playbackContext = null;
 let activeStream = null;
+let nextPlayTime = 0;  // Track when next audio should play
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'START_CAPTURE') {
@@ -67,6 +68,8 @@ function stopCapture() {
     playbackContext.close();
     playbackContext = null;
   }
+
+  nextPlayTime = 0;  // Reset play time
 }
 
 function connectSocket(stream, targetLang) {
@@ -76,8 +79,19 @@ function connectSocket(stream, targetLang) {
   socket = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
   
-  socket.onopen = () => {
+  socket.onopen = async () => {
     console.log("[Offscreen] WebSocket connected");
+    nextPlayTime = 0;  // Reset timing when connection starts
+
+    // Pre-create and resume playback context to avoid autoplay issues
+    if (!playbackContext) {
+      playbackContext = new AudioContext({ sampleRate: 24000 });
+    }
+    if (playbackContext.state === 'suspended') {
+      await playbackContext.resume();
+      console.log("[Offscreen] Playback AudioContext resumed");
+    }
+
     setupAudioProcessing(stream, socket);
   };
   
@@ -147,17 +161,28 @@ function playPcmChunk(data) {
 function processPcmData(buffer) {
   const int16Array = new Int16Array(buffer);
   const float32Array = new Float32Array(int16Array.length);
-  
+
   for (let i = 0; i < int16Array.length; i++) {
     float32Array[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
   }
-  
+
   const audioBuffer = playbackContext.createBuffer(1, float32Array.length, playbackContext.sampleRate);
   audioBuffer.getChannelData(0).set(float32Array);
-  
+
   const source = playbackContext.createBufferSource();
   source.buffer = audioBuffer;
   source.connect(playbackContext.destination);
-  source.start();
+
+  // Schedule audio to play at the correct time to avoid gaps/overlaps
+  const currentTime = playbackContext.currentTime;
+  const startTime = Math.max(currentTime, nextPlayTime);
+
+  source.start(startTime);
+
+  // Calculate when this buffer will finish playing
+  const duration = audioBuffer.duration;
+  nextPlayTime = startTime + duration;
+
+  console.log(`[Offscreen] Playing audio: ${(float32Array.length / 24000 * 1000).toFixed(0)}ms, scheduled at ${startTime.toFixed(2)}s`);
 }
 

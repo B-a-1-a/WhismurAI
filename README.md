@@ -14,6 +14,7 @@ A Chrome Extension for real-time browser tab audio translation using AI.
 WhismurAI captures live audio from a browser tab, translates it in real-time, and plays it back using Fish Audio for Text-to-Speech (TTS).
 
 **Tech Stack:**
+
 - **Frontend:** React 18, Vite, Tailwind CSS, Chrome Extension Manifest V3
 - **Backend:** Python 3.10 - 3.13 (Python 3.14+ not yet supported), FastAPI, Pipecat AI
 - **AI Services:** Deepgram (STT), OpenAI (Translation), Fish Audio (TTS)
@@ -47,7 +48,7 @@ WhismurAI/
 cd backend
 
 # Create virtual environment
-python3 -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
