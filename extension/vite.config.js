@@ -12,6 +12,8 @@ export default defineConfig({
         // Copy manifest and background script to dist
         copyFileSync('public/manifest.json', 'dist/manifest.json')
         copyFileSync('public/background.js', 'dist/background.js')
+        copyFileSync('public/offscreen.html', 'dist/offscreen.html')
+        copyFileSync('public/offscreen.js', 'dist/offscreen.js')
       }
     }
   ],

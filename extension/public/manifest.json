@@ -5,7 +5,8 @@
   "description": "Real-time browser tab audio translation",
   "permissions": [
     "tabCapture",
-    "activeTab"
+    "activeTab",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"
