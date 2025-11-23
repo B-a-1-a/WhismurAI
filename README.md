@@ -15,6 +15,9 @@ Complete workflow to record your voice, translate audio to another language, and
 ### 1. Setup
 
 ```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -24,6 +27,7 @@ cp .env.example .env
 ```
 
 Get your API keys:
+
 - **OpenAI**: https://platform.openai.com/api-keys
 - **Fish Audio**: https://fish.audio/app/api-keys/
 
@@ -46,6 +50,7 @@ python full_pipeline.py
 ```
 
 This will:
+
 1. Transcribe your audio
 2. Translate it to your target language
 3. Generate speech (with your voice if you've cloned it)
@@ -75,17 +80,20 @@ python 1_clone_voice.py
 ```
 
 **Requirements:**
+
 - Place 3-5 minutes of clean voice recordings in `./voice_samples/`
 - Supported formats: `.mp3`, `.wav`, `.flac`
 - Use clear recordings without background noise
 
 **Tips for best results:**
+
 - Record in a quiet environment
 - Use consistent tone and pace
 - Include varied speech patterns
 - Avoid music or background noise
 
 **Output:**
+
 - Creates a voice model on Fish Audio
 - Saves model ID to `voice_model_id.txt`
 - This ID will be used automatically in step 4
@@ -97,15 +105,18 @@ python 2_transcribe.py
 ```
 
 **What it does:**
+
 - Converts your audio recording to text using OpenAI Whisper
 - Auto-detects language or you can specify it
 - Saves transcription to `transcription_[filename].txt`
 
 **Input:**
+
 - Place your audio file in `./input_audio/`
 - Supported formats: `.mp3`, `.wav`, `.m4a`, `.flac`, `.webm`
 
 **Output:**
+
 - Text file with transcription
 
 ### Step 3: Translate Text
@@ -115,16 +126,19 @@ python 3_translate.py
 ```
 
 **What it does:**
+
 - Translates your transcribed text using GPT-4o
 - Maintains tone and meaning accurately
 - Saves translation to `translation_[language]_[filename].txt`
 
 **Supported languages:**
+
 - Spanish, French, German, Italian, Portuguese
 - Chinese, Japanese, Korean, Arabic, Hindi
 - And many more!
 
 **Output:**
+
 - Text file with translation
 
 ### Step 4: Generate Speech
@@ -134,16 +148,19 @@ python 4_generate_speech.py
 ```
 
 **What it does:**
+
 - Generates audio from translated text using Fish Audio
 - Uses your cloned voice if available
 - Saves audio to `./output_audio/`
 
 **Options:**
+
 - **Voice Model**: Use your cloned voice (from step 1) or generic voice
 - **Format**: mp3, wav, opus
 - **Quality**: Adjustable bitrate for mp3
 
 **Output:**
+
 - Audio file in `./output_audio/` directory
 
 ## 🔧 Configuration
@@ -193,28 +210,34 @@ python full_pipeline.py
 ## ⚙️ API Rate Limits
 
 **OpenAI:**
+
 - Whisper: Check your account limits
 - GPT-4o: Check your account limits
 
 **Fish Audio:**
+
 - See: https://fish.audio/developer-guide/models-pricing/pricing-and-rate-limits
 
 ## 🐛 Troubleshooting
 
 ### "No audio files found"
+
 - Make sure your audio files are in the correct directory
 - Check file format is supported (.mp3, .wav, etc.)
 
 ### "API key invalid"
+
 - Verify your API keys in `.env` file
 - Make sure there are no extra spaces or quotes
 
 ### "Voice model not found"
+
 - Run `1_clone_voice.py` first
 - Check that `voice_model_id.txt` exists
 - Verify model ID is correct
 
 ### "Audio quality is poor"
+
 - Use higher quality input audio
 - For voice cloning, ensure clean recordings
 - Try different audio format (wav for best quality)
@@ -222,11 +245,13 @@ python full_pipeline.py
 ## 💡 Tips
 
 1. **Voice Cloning Quality:**
+
    - Use at least 3-5 minutes of audio
    - Record in a quiet environment
    - Speak naturally with varied intonation
 
 2. **Translation Quality:**
+
    - Provide source language for better context
    - Review translations before generating speech
    - Use GPT-4o for most accurate translations
@@ -245,6 +270,7 @@ python full_pipeline.py
 ## 🤝 Support
 
 If you encounter issues:
+
 1. Check the troubleshooting section
 2. Verify your API keys and credits
 3. Review API documentation
@@ -253,6 +279,7 @@ If you encounter issues:
 ## 📄 License
 
 This project is for educational and personal use. Make sure to comply with:
+
 - OpenAI's usage policies
 - Fish Audio's terms of service
 - Copyright laws for voice cloning and content
