@@ -7,6 +7,18 @@ function App() {
   const [transcripts, setTranscripts] = useState([]);
   const transcriptsEndRef = useRef(null);
 
+  // Language code to name mapping
+  const languageNames = {
+    'es': 'Spanish',
+    'fr': 'French',
+    'de': 'German',
+    'ja': 'Japanese',
+    'zh': 'Chinese',
+    'ko': 'Korean',
+    'it': 'Italian',
+    'pt': 'Portuguese'
+  };
+
   useEffect(() => {
     // Initial load
     chrome.storage.local.get(['transcripts'], (result) => {
@@ -129,7 +141,7 @@ function App() {
             <p className="text-sm text-gray-400">Status:</p>
           </div>
           <p className="text-lg text-green-400 font-mono mt-1">
-            Translating to {targetLang.toUpperCase()}
+            Translating to {languageNames[targetLang] || targetLang}
           </p>
         </div>
       )}
@@ -151,7 +163,7 @@ function App() {
               )}
               {t.translation && (
                 <div className="text-sm p-2 rounded border bg-cyan-900/20 border-cyan-900/50 text-cyan-100">
-                  <p className="text-[10px] uppercase font-bold opacity-50 mb-1">{targetLang.toUpperCase()}</p>
+                  <p className="text-[10px] uppercase font-bold opacity-50 mb-1">{languageNames[targetLang] || targetLang.toUpperCase()}</p>
                   <p>{t.translation}</p>
                 </div>
               )}

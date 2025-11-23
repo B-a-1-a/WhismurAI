@@ -10,6 +10,7 @@ let nextStartTime = 0; // Track when the next chunk should play
 // Transcript aggregation state
 let currentTranscript = { original: '', translation: '' };
 let transcriptTimeout = null;
+const TRANSCRIPT_DEBOUNCE_MS = 1000; // Wait 1 second after last chunk
 
 notifyBackgroundReady();
 
@@ -137,21 +138,37 @@ async function connectSocket(stream, targetLang) {
         if (data.type === 'transcript') {
           console.log(`[Offscreen] Transcript chunk (${data.mode}):`, data.text);
           
-          // Accumulate streaming chunks
+          // Accumulate streaming chunks with smart spacing
+          const appendText = (current, newText) => {
+            if (!current) return newText;
+            // Add space if current doesn't end with space, newText doesn't start with space, 
+            // and newText isn't just punctuation
+            if (current.length > 0 && 
+                !current.endsWith(' ') && 
+                !newText.startsWith(' ') && 
+                !/^[.,;!?]/.test(newText)) {
+              return current + ' ' + newText;
+            }
+            return current + newText;
+          };
+
           if (data.mode === 'original') {
-            currentTranscript.original += data.text;
+            currentTranscript.original = appendText(currentTranscript.original, data.text);
           } else if (data.mode === 'translation') {
-            currentTranscript.translation += data.text;
+            currentTranscript.translation = appendText(currentTranscript.translation, data.text);
           }
           
           // Debounce: wait for chunks to stop coming before saving
           clearTimeout(transcriptTimeout);
           transcriptTimeout = setTimeout(() => {
-            // Save the complete transcript pair
-            if (currentTranscript.original || currentTranscript.translation) {
+            // Save the complete transcript pair (only if we have meaningful content)
+            const hasOriginal = currentTranscript.original && currentTranscript.original.trim().length > 0;
+            const hasTranslation = currentTranscript.translation && currentTranscript.translation.trim().length > 0;
+            
+            if (hasOriginal || hasTranslation) {
               const transcriptPair = {
-                original: currentTranscript.original,
-                translation: currentTranscript.translation,
+                original: currentTranscript.original.trim(),
+                translation: currentTranscript.translation.trim(),
                 timestamp: Date.now()
               };
               
@@ -167,7 +184,7 @@ async function connectSocket(stream, targetLang) {
               // Reset for next transcript
               currentTranscript = { original: '', translation: '' };
             }
-          }, 500); // Wait 500ms after last chunk
+          }, TRANSCRIPT_DEBOUNCE_MS);
         }
       } catch (e) {
         console.error("[Offscreen] Failed to parse JSON:", e);

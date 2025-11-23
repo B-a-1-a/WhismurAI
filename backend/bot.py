@@ -42,6 +42,33 @@ class TranscriptProcessor(FrameProcessor):
         
         await self.push_frame(frame, direction)
 
+class ContextManager(FrameProcessor):
+    """Manages LLM context to prevent accumulation issues"""
+    def __init__(self, context, max_messages=3):
+        super().__init__()
+        self.context = context
+        self.max_messages = max_messages
+        self.message_count = 0
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        
+        # Track messages and periodically clear context (keep only system message)
+        if isinstance(frame, TranscriptionFrame):
+            self.message_count += 1
+            if self.message_count >= self.max_messages:
+                print("[ContextManager] Clearing conversation history to prevent accumulation")
+                # Keep only the system message
+                if hasattr(self.context, 'messages') and len(self.context.messages) > 0:
+                    system_msg = self.context.messages[0]  # Keep system prompt
+                    if hasattr(self.context, 'set_messages'):
+                        self.context.set_messages([system_msg])
+                    else:
+                        self.context._messages = [system_msg]
+                self.message_count = 0
+        
+        await self.push_frame(frame, direction)
+
 class FastAPIInputTransport(BaseInputTransport):
     def __init__(self, websocket, params):
         super().__init__(params)
@@ -126,6 +153,20 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     Note: As of pipecat 0.0.95, PipelineTask.run() requires PipelineTaskParams
     with the asyncio event loop.
     """
+    # Map language codes to full names for better LLM understanding
+    language_names = {
+        'es': 'Spanish',
+        'fr': 'French',
+        'de': 'German',
+        'ja': 'Japanese',
+        'zh': 'Chinese',
+        'ko': 'Korean',
+        'it': 'Italian',
+        'pt': 'Portuguese'
+    }
+    
+    target_language_name = language_names.get(target_lang, target_lang)
+    
     # Custom Transport wrapping FastAPI WebSocket
     # Audio format: 16kHz input (Deepgram default), 24kHz output (Fish Audio)
     transport = FastAPITransport(
@@ -162,7 +203,12 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     messages = [
         {
             "role": "system",
-            "content": f"You are a simultaneous interpreter. Translate the input text immediately into {target_lang}. Output ONLY the translation, no explanations or additional text."
+            "content": f"""You are a professional simultaneous interpreter. Your task:
+1. Translate each input phrase independently into {target_language_name}
+2. Output ONLY the {target_language_name} translation - no English, no explanations
+3. If the input is incomplete or unclear, translate what you can
+4. Each message is independent - do not reference previous translations
+5. Be accurate and natural in {target_language_name}"""
         }
     ]
     context = OpenAILLMContext(messages)
@@ -170,10 +216,13 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
 
     transcript_sender_original = TranscriptProcessor(websocket_client)
     transcript_sender_translated = TranscriptProcessor(websocket_client)
+    # Clear context after every message to ensure independent translation
+    context_manager = ContextManager(context, max_messages=1)
 
     pipeline = Pipeline([
         transport.input(),
         stt,
+        context_manager,  # Add context management before sending to LLM
         transcript_sender_original,
         context_aggregator.user(),
         llm,
