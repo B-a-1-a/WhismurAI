@@ -10,7 +10,7 @@ let nextStartTime = 0; // Track when the next chunk should play
 // Transcript aggregation state
 let currentTranscript = { original: '', translation: '' };
 let transcriptTimeout = null;
-const TRANSCRIPT_DEBOUNCE_MS = 1000; // Wait 1 second after last chunk
+const TRANSCRIPT_DEBOUNCE_MS = 500; // Wait 500ms for translation to arrive (reduced from 1000ms)
 
 notifyBackgroundReady();
 
@@ -136,55 +136,68 @@ async function connectSocket(stream, targetLang) {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'transcript') {
-          console.log(`[Offscreen] Transcript chunk (${data.mode}):`, data.text);
+          const isFinal = data.is_final !== undefined ? data.is_final : true; // Default to true for backward compatibility
+          console.log(`[Offscreen] Transcript chunk (${data.mode}, final=${isFinal}):`, data.text);
           
-          // Accumulate streaming chunks with smart spacing
-          const appendText = (current, newText) => {
-            if (!current) return newText;
-            // Add space if current doesn't end with space, newText doesn't start with space, 
-            // and newText isn't just punctuation
-            if (current.length > 0 && 
-                !current.endsWith(' ') && 
-                !newText.startsWith(' ') && 
-                !/^[.,;!?]/.test(newText)) {
-              return current + ' ' + newText;
+          // Only process FINAL transcripts to avoid overlaps and repetition
+          if (isFinal) {
+            if (data.mode === 'original') {
+              currentTranscript.original = data.text;  // Replace with complete sentence
+              console.log('[Offscreen] 📝 FINAL original received:', data.text.substring(0, 80));
+            } else if (data.mode === 'translation') {
+              currentTranscript.translation = data.text;  // Replace with complete translation
+              console.log('[Offscreen] 🌐 FINAL translation received:', data.text.substring(0, 80));
             }
-            return current + newText;
-          };
-
-          if (data.mode === 'original') {
-            currentTranscript.original = appendText(currentTranscript.original, data.text);
-          } else if (data.mode === 'translation') {
-            currentTranscript.translation = appendText(currentTranscript.translation, data.text);
-          }
-          
-          // Debounce: wait for chunks to stop coming before saving
-          clearTimeout(transcriptTimeout);
-          transcriptTimeout = setTimeout(() => {
-            // Save the complete transcript pair (only if we have meaningful content)
-            const hasOriginal = currentTranscript.original && currentTranscript.original.trim().length > 0;
-            const hasTranslation = currentTranscript.translation && currentTranscript.translation.trim().length > 0;
             
-            if (hasOriginal || hasTranslation) {
-              const transcriptPair = {
-                original: currentTranscript.original.trim(),
-                translation: currentTranscript.translation.trim(),
-                timestamp: Date.now()
-              };
+            // Clear interim display when we get a final chunk
+            chrome.runtime.sendMessage({
+                type: 'TRANSCRIPT_INTERIM',
+                data: null
+            }).catch(() => {}); // Ignore errors if popup is closed
+
+            // Immediately save when we get a final pair
+            // (or wait briefly for the translation to arrive)
+            clearTimeout(transcriptTimeout);
+            transcriptTimeout = setTimeout(() => {
+              const hasOriginal = currentTranscript.original && currentTranscript.original.trim().length > 0;
+              const hasTranslation = currentTranscript.translation && currentTranscript.translation.trim().length > 0;
               
-              console.log('[Offscreen] Saving transcript pair:', transcriptPair);
-              appendTranscript(transcriptPair);
-              
-              // Broadcast to popup
-              chrome.runtime.sendMessage({
-                type: 'TRANSCRIPT_UPDATE',
-                data: transcriptPair
-              }).catch(err => console.log('[Offscreen] Failed to broadcast:', err));
-              
-              // Reset for next transcript
-              currentTranscript = { original: '', translation: '' };
-            }
-          }, TRANSCRIPT_DEBOUNCE_MS);
+              if (hasOriginal || hasTranslation) {
+                const transcriptPair = {
+                  original: currentTranscript.original.trim(),
+                  translation: currentTranscript.translation.trim(),
+                  timestamp: Date.now()
+                };
+                
+                console.log('[Offscreen] ✅ Saving complete transcript pair:', {
+                  original: transcriptPair.original.substring(0, 60) + '...',
+                  translation: transcriptPair.translation.substring(0, 60) + '...'
+                });
+                appendTranscript(transcriptPair);
+                
+                // Broadcast to popup
+                chrome.runtime.sendMessage({
+                  type: 'TRANSCRIPT_UPDATE',
+                  data: transcriptPair
+                }).catch(err => console.log('[Offscreen] Failed to broadcast:', err));
+                
+                // Reset for next transcript
+                currentTranscript = { original: '', translation: '' };
+              }
+            }, 500);  // Shorter timeout (500ms) since we're only waiting for translation
+          } else {
+            // Show interim results (sentence being built) but don't save them
+            console.log(`[Offscreen] 🔨 Building sentence (${data.mode}): ${data.text.substring(0, 50)}...`);
+            
+            // Broadcast interim to popup
+            chrome.runtime.sendMessage({
+                type: 'TRANSCRIPT_INTERIM',
+                data: {
+                    text: data.text,
+                    mode: data.mode
+                }
+            }).catch(() => {}); // Ignore errors if popup is closed
+          }
         }
       } catch (e) {
         console.error("[Offscreen] Failed to parse JSON:", e);
@@ -319,4 +332,3 @@ function processPcmData(buffer) {
   // Advance the schedule pointer
   nextStartTime += audioBuffer.duration;
 }
-

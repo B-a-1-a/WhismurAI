@@ -12,7 +12,112 @@ from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame, TextFrame, TranscriptionFrame, LLMTextFrame, TTSTextFrame, TranslationFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame
 
-class TranscriptProcessor(FrameProcessor):
+class SentenceAggregator(FrameProcessor):
+    """
+    Accumulates transcript chunks into complete sentences before passing them downstream.
+    Also handles sending 'original' transcript updates to the WebSocket.
+    """
+    def __init__(self, websocket):
+        super().__init__()
+        self.websocket = websocket
+        self.sentence_buffer = ""
+        
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        
+        if isinstance(frame, TranscriptionFrame):
+            is_final = getattr(frame, 'speech_final', False)
+            text = frame.text.strip()
+            
+            print(f"[SentenceAggregator] Received TranscriptionFrame: text='{text[:50]}...', is_final={is_final}")
+            
+            if not text:
+                return
+
+            # Strategy: Accumulate text and check for natural sentence boundaries
+            # Deepgram's interim results often contain complete phrases/sentences
+            
+            # Check if this looks like a sentence ending (has punctuation)
+            has_punctuation = text.rstrip().endswith(('.', '!', '?', '。', '！', '？'))
+            
+            # For interim results, we accumulate and look for sentence boundaries
+            if not is_final:
+                # Update buffer with latest interim text (replace, don't append)
+                # Deepgram sends progressively longer interim results
+                self.sentence_buffer = text
+                
+                # If we detect a sentence ending in interim, treat it as complete
+                if has_punctuation:
+                    print(f"[SentenceAggregator] Detected sentence end in interim: {self.sentence_buffer[:80]}")
+                    
+                    # Send FINAL to UI
+                    try:
+                        await self.websocket.send_json({
+                            "type": "transcript",
+                            "mode": "original", 
+                            "text": self.sentence_buffer,
+                            "is_final": True
+                        })
+                    except Exception as e:
+                        print(f"[SentenceAggregator] WS Error: {e}")
+
+                    # Send to LLM
+                    new_frame = TranscriptionFrame(
+                        text=self.sentence_buffer,
+                        user_id=frame.user_id,
+                        timestamp=frame.timestamp
+                    )
+                    await self.push_frame(new_frame, direction)
+                    
+                    # Clear buffer
+                    self.sentence_buffer = ""
+                else:
+                    # Still building - send interim update
+                    print(f"[SentenceAggregator] Buffering interim: {self.sentence_buffer[:50]}...")
+                    try:
+                        await self.websocket.send_json({
+                            "type": "transcript",
+                            "mode": "original", 
+                            "text": self.sentence_buffer,
+                            "is_final": False
+                        })
+                    except Exception as e:
+                        print(f"[SentenceAggregator] WS Error: {e}")
+            else:
+                # speech_final=True - Deepgram detected end of speech
+                # This is the final version, send it
+                print(f"[SentenceAggregator] Speech final received: {text[:80]}")
+                
+                # Send FINAL to UI
+                try:
+                    await self.websocket.send_json({
+                        "type": "transcript",
+                        "mode": "original", 
+                        "text": text,
+                        "is_final": True
+                    })
+                except Exception as e:
+                    print(f"[SentenceAggregator] WS Error: {e}")
+
+                # Send to LLM
+                new_frame = TranscriptionFrame(
+                    text=text,
+                    user_id=frame.user_id,
+                    timestamp=frame.timestamp
+                )
+                await self.push_frame(new_frame, direction)
+                
+                # Clear buffer
+                self.sentence_buffer = ""
+                
+        else:
+            # Pass through all other frames
+            await self.push_frame(frame, direction)
+
+class TranslationSender(FrameProcessor):
+    """
+    Handles sending LLM translations to the WebSocket.
+    """
     def __init__(self, websocket):
         super().__init__()
         self.websocket = websocket
@@ -21,24 +126,21 @@ class TranscriptProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
         
         try:
-            # print(f"TranscriptProcessor Processing frame: {type(frame)}") # Debug logging
-            if isinstance(frame, TranscriptionFrame):
-                await self.websocket.send_json({
-                    "type": "transcript",
-                    "mode": "original", 
-                    "text": frame.text
-                })
-            elif isinstance(frame, LLMTextFrame) or isinstance(frame, TextFrame):
-                 # Check for specific subclasses like LLMTextFrame which OpenAILLMService likely emits
-                await self.websocket.send_json({
-                    "type": "transcript",
-                    "mode": "translation",
-                    "text": frame.text
-                })
-                print(f"[TranscriptProcessor] Sent translation chunk: {frame.text[:20]}...")
+            if isinstance(frame, LLMTextFrame) or isinstance(frame, TextFrame):
+                # LLM translations - send to WebSocket
+                # We treat LLM output chunks as final for the UI to append?
+                # Or should we accumulate? For now, existing behavior is to send as final.
+                if frame.text and frame.text.strip():
+                    await self.websocket.send_json({
+                        "type": "transcript",
+                        "mode": "translation",
+                        "text": frame.text,
+                        "is_final": True
+                    })
+                    print(f"[TranslationSender] Sent translation: {frame.text[:50]}...")
 
         except Exception as e:
-            print(f"TranscriptProcessor: Failed to send message (connection likely closed): {e}")
+            print(f"TranslationSender: Failed to send message: {e}")
         
         await self.push_frame(frame, direction)
 
@@ -90,6 +192,8 @@ class FastAPIInputTransport(BaseInputTransport):
                 chunk_count += 1
                 if chunk_count % 50 == 0:  # Log every 50 chunks to avoid spam
                     print(f"[FastAPIInput] Received {chunk_count} audio chunks (latest: {len(message)} bytes)")
+                if chunk_count == 1:
+                    print(f"[FastAPIInput] First audio chunk received: {len(message)} bytes")
                 frame = InputAudioRawFrame(
                     audio=message, 
                     sample_rate=self._params.audio_in_sample_rate, 
@@ -97,7 +201,7 @@ class FastAPIInputTransport(BaseInputTransport):
                 )
                 await self.push_frame(frame)
         except Exception as e:
-            print(f"WebSocket Input closed: {e}")
+            print(f"[FastAPIInput] WebSocket Input closed: {e}")
             await self.push_frame(CancelFrame())
 
     async def stop(self, frame: EndFrame):
@@ -144,14 +248,6 @@ class FastAPITransport(BaseTransport):
 async def run_translation_bot(websocket_client, reference_id, target_lang):
     """
     Run the translation pipeline with Deepgram STT -> OpenAI Translation -> Fish TTS
-    
-    Pipeline Configuration:
-    - Deepgram STT: 16kHz input sample rate (configurable via encoding/sample_rate params)
-    - OpenAI LLM: Translates transcribed text to target language
-    - Fish Audio TTS: Uses reference_id for voice cloning (persistent voice model)
-    
-    Note: As of pipecat 0.0.95, PipelineTask.run() requires PipelineTaskParams
-    with the asyncio event loop.
     """
     # Map language codes to full names for better LLM understanding
     language_names = {
@@ -168,7 +264,6 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     target_language_name = language_names.get(target_lang, target_lang)
     
     # Custom Transport wrapping FastAPI WebSocket
-    # Audio format: 16kHz input (Deepgram default), 24kHz output (Fish Audio)
     transport = FastAPITransport(
         websocket=websocket_client,
         params=TransportParams(
@@ -178,28 +273,30 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     )
 
     # Deepgram STT Service
-    # Streams audio via WebSocket at wss://api.deepgram.com/v1/listen
-    # Explicitly configure for 16kHz linear16 PCM audio
+    deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not deepgram_api_key:
+        print("[ERROR] DEEPGRAM_API_KEY not found in environment variables!")
+        raise ValueError("DEEPGRAM_API_KEY is required")
+    
+    print(f"[STT] Initializing Deepgram with API key: {deepgram_api_key[:8]}...")
     stt = DeepgramSTTService(
-        api_key=os.getenv("DEEPGRAM_API_KEY"),
+        api_key=deepgram_api_key,
         sample_rate=16000,
-        encoding="linear16"
+        encoding="linear16",
+        # Enable interim results and configure endpointing to detect speech boundaries
+        interim_results=True,  # Get real-time updates
+        endpointing=800,  # Wait 800ms of silence before finalizing
+        smart_format=True,  # Auto-punctuation and capitalization
+        utterance_end_ms=1500,  # Detect utterance end after 1.5s gap between words
+        punctuate=True,  # Ensure punctuation is added for sentence detection
     )
+    print("[STT] Deepgram STT Service initialized")
     
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     
-    # Fish Audio TTS Service
-    # reference_id: Persistent voice model ID created via client.voices.create()
-    # or use on-the-fly cloning with ReferenceAudio objects
-    # tts = FishAudioTTSService(
-    #     api_key=os.getenv("FISH_API_KEY"),
-    #     reference_id=reference_id,  # Voice model ID from Fish Audio console
-    #     latency="balanced"
-    # )
-
     messages = [
         {
             "role": "system",
@@ -214,22 +311,34 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     context = OpenAILLMContext(messages)
     context_aggregator = llm.create_context_aggregator(context)
 
-    transcript_sender_original = TranscriptProcessor(websocket_client)
-    transcript_sender_translated = TranscriptProcessor(websocket_client)
+    # New processors
+    sentence_aggregator = SentenceAggregator(websocket_client)
+    translation_sender = TranslationSender(websocket_client)
+    
     # Clear context after every message to ensure independent translation
     context_manager = ContextManager(context, max_messages=1)
 
     pipeline = Pipeline([
         transport.input(),
         stt,
-        context_manager,  # Add context management before sending to LLM
-        transcript_sender_original,
+        sentence_aggregator,   # Buffer and form sentences FIRST
+        context_manager,       # Manage context based on full sentences
         context_aggregator.user(),
         llm,
-        transcript_sender_translated,
+        translation_sender,    # Send translations to WS
         # tts,
         transport.output(),
     ])
+    
+    print("[Pipeline] Pipeline created with components:")
+    print("  1. FastAPI Input Transport")
+    print("  2. Deepgram STT")
+    print("  3. Sentence Aggregator")
+    print("  4. Context Manager")
+    print("  5. LLM Context Aggregator")
+    print("  6. OpenAI LLM")
+    print("  7. Translation Sender")
+    print("  8. FastAPI Output Transport")
 
     task = PipelineTask(
         pipeline,
@@ -240,6 +349,4 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         )
     )
     
-    # IMPORTANT: pipecat 0.0.95+ requires PipelineTaskParams with event loop
-    # This was changed from the previous signature that took no arguments
     await task.run(PipelineTaskParams(loop=asyncio.get_running_loop()))

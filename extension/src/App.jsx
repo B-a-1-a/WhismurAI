@@ -5,6 +5,7 @@ function App() {
   const [status, setStatus] = useState('idle'); // idle, translating
   const [targetLang, setTargetLang] = useState('es');
   const [transcripts, setTranscripts] = useState([]);
+  const [interimTranscript, setInterimTranscript] = useState(null);
   const transcriptsEndRef = useRef(null);
 
   // Language code to name mapping
@@ -39,7 +40,7 @@ function App() {
       }
     });
 
-    // Listen for changes
+    // Listen for storage changes
     const handleStorageChange = (changes, area) => {
       if (area === 'local' && changes.transcripts) {
         console.log('[Popup] Storage changed, new transcripts:', changes.transcripts.newValue);
@@ -47,22 +48,32 @@ function App() {
       }
     };
     
+    // Listen for interim messages
+    const handleMessage = (msg) => {
+      if (msg.type === 'TRANSCRIPT_INTERIM') {
+        setInterimTranscript(msg.data); // data is { text, mode } or null
+      }
+    };
+
     chrome.storage.onChanged.addListener(handleStorageChange);
+    chrome.runtime.onMessage.addListener(handleMessage);
     
     return () => {
       chrome.storage.onChanged.removeListener(handleStorageChange);
+      chrome.runtime.onMessage.removeListener(handleMessage);
     };
   }, []);
 
   useEffect(() => {
     transcriptsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [transcripts]);
+  }, [transcripts, interimTranscript]); // Scroll on interim updates too
 
   const handleStart = () => {
     setStatus('translating');
     // Clear previous transcripts when starting new session
     chrome.storage.local.set({ transcripts: [] });
     setTranscripts([]);
+    setInterimTranscript(null);
     chrome.runtime.sendMessage({
       action: 'START_SESSION',
       targetLang: targetLang
@@ -71,6 +82,7 @@ function App() {
 
   const handleStop = () => {
     setStatus('idle');
+    setInterimTranscript(null);
     chrome.runtime.sendMessage({
       action: 'STOP_SESSION'
     });
@@ -79,6 +91,7 @@ function App() {
   const handleClear = () => {
     chrome.storage.local.set({ transcripts: [] });
     setTranscripts([]);
+    setInterimTranscript(null);
   };
 
   return (
@@ -148,27 +161,46 @@ function App() {
 
       {/* Transcript Section */}
       <div className="flex-1 bg-gray-800/50 rounded border border-gray-700 p-2 overflow-y-auto flex flex-col gap-2">
-        {transcripts.length === 0 ? (
+        {transcripts.length === 0 && !interimTranscript ? (
           <div className="flex-1 flex items-center justify-center text-gray-500 text-xs italic">
             Transcript will appear here...
           </div>
         ) : (
-          transcripts.map((t, i) => (
-            <div key={i} className="mb-2">
-              {t.original && (
-                <div className="text-sm p-2 rounded border bg-gray-800 border-gray-700 text-gray-300 mb-1">
-                  <p className="text-[10px] uppercase font-bold opacity-50 mb-1">Original</p>
-                  <p>{t.original}</p>
-                </div>
-              )}
-              {t.translation && (
-                <div className="text-sm p-2 rounded border bg-cyan-900/20 border-cyan-900/50 text-cyan-100">
-                  <p className="text-[10px] uppercase font-bold opacity-50 mb-1">{languageNames[targetLang] || targetLang.toUpperCase()}</p>
-                  <p>{t.translation}</p>
-                </div>
-              )}
-            </div>
-          ))
+          <>
+            {transcripts.map((t, i) => (
+              <div key={i} className="mb-2">
+                {t.original && (
+                  <div className="text-sm p-2 rounded border bg-gray-800 border-gray-700 text-gray-300 mb-1">
+                    <p className="text-[10px] uppercase font-bold opacity-50 mb-1">Original</p>
+                    <p>{t.original}</p>
+                  </div>
+                )}
+                {t.translation && (
+                  <div className="text-sm p-2 rounded border bg-cyan-900/20 border-cyan-900/50 text-cyan-100">
+                    <p className="text-[10px] uppercase font-bold opacity-50 mb-1">{languageNames[targetLang] || targetLang.toUpperCase()}</p>
+                    <p>{t.translation}</p>
+                  </div>
+                )}
+              </div>
+            ))}
+            
+            {/* Interim Transcript (Ghost Text) */}
+            {interimTranscript && (
+              <div className="mb-2 opacity-75 animate-pulse">
+                {interimTranscript.mode === 'original' ? (
+                   <div className="text-sm p-2 rounded border bg-gray-800 border-gray-600 text-gray-400 mb-1 border-dashed">
+                    <p className="text-[10px] uppercase font-bold opacity-50 mb-1">Listening...</p>
+                    <p className="italic">{interimTranscript.text}...</p>
+                  </div>
+                ) : (
+                   <div className="text-sm p-2 rounded border bg-cyan-900/10 border-cyan-900/30 text-cyan-200 border-dashed">
+                    <p className="text-[10px] uppercase font-bold opacity-50 mb-1">Translating...</p>
+                    <p className="italic">{interimTranscript.text}...</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
         <div ref={transcriptsEndRef} />
       </div>
@@ -182,4 +214,3 @@ function App() {
 }
 
 export default App;
-

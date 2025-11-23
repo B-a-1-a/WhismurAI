@@ -13,6 +13,9 @@ class PCMProcessor extends AudioWorkletProcessor {
     this.buffer = new Float32Array(this.bufferSize);
     this.bufferIndex = 0;
     
+    // NEW: Track sub-sample position across process calls to avoid audio glitches
+    this.sampleAccumulator = 0;
+    
     console.log(`[PCMProcessor] Input: ${this.inputSampleRate}Hz, Output: ${this.outputSampleRate}Hz, Ratio: ${this.resampleRatio}`);
   }
 
@@ -34,19 +37,29 @@ class PCMProcessor extends AudioWorkletProcessor {
     }
 
     // Resample and accumulate samples into buffer
-    // Simple decimation: take every Nth sample based on resample ratio
-    for (let i = 0; i < inputChannel.length; i += this.resampleRatio) {
-      const index = Math.floor(i);
-      if (index < inputChannel.length) {
-        this.buffer[this.bufferIndex++] = inputChannel[index];
+    // We start from the accumulated offset from the previous frame
+    let i = this.sampleAccumulator;
 
-        // When buffer is full, convert and send
-        if (this.bufferIndex >= this.bufferSize) {
-          this.sendPCMData();
-          this.bufferIndex = 0;
-        }
+    while (i < inputChannel.length) {
+      const index = Math.floor(i);
+      
+      if (this.bufferIndex < this.bufferSize) {
+        this.buffer[this.bufferIndex++] = inputChannel[index];
       }
+
+      // When buffer is full, convert and send
+      if (this.bufferIndex >= this.bufferSize) {
+        this.sendPCMData();
+        this.bufferIndex = 0;
+      }
+
+      // Advance by the ratio
+      i += this.resampleRatio;
     }
+
+    // Save the remainder for the next block
+    // e.g. if length is 128, and i ended at 129.5, we start next block at 1.5
+    this.sampleAccumulator = i - inputChannel.length;
 
     return true; // Keep processor alive
   }
