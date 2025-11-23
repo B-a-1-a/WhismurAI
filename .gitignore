@@ -2,12 +2,15 @@
 __pycache__/
 *.py[cod]
 *$py.class
-backend/venv/
-backend/.env
+venv/
 .env
+.DS_Store
 
 # Node
 node_modules/
-extension/dist/
-extension/.env
+dist/
 .DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
