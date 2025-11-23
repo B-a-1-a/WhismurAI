@@ -4,7 +4,7 @@ Get up and running with WhismurAI in 5 minutes!
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.10 - 3.13 (Python 3.14+ not yet supported)
 - Node.js 18+
 - Chrome Browser
 - API Keys from:

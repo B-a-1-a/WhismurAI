@@ -15,7 +15,7 @@ WhismurAI captures live audio from a browser tab, translates it in real-time, an
 
 **Tech Stack:**
 - **Frontend:** React 18, Vite, Tailwind CSS, Chrome Extension Manifest V3
-- **Backend:** Python 3.10+, FastAPI, Pipecat AI
+- **Backend:** Python 3.10 - 3.13 (Python 3.14+ not yet supported), FastAPI, Pipecat AI
 - **AI Services:** Deepgram (STT), OpenAI (Translation), Fish Audio (TTS)
 
 ## Project Structure
