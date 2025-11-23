@@ -1,9 +1,9 @@
 import os
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineTask
-from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.services.openai import OpenAILLMService
-from pipecat.services.fish import FishTTSService
+from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.fish.tts import FishTTSService
 from pipecat.transports.network.websocket_server import WebSocketServerTransport, WebSocketServerParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
