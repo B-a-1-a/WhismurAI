@@ -9,6 +9,14 @@ let nextStartTime = 0; // Track when the next chunk should play
 let isPlayingAudio = false; // Track if TTS audio is currently playing
 let activeTabId = null; // Track the current tab ID for sending messages
 
+// Voice cloning state
+let voiceCloneBuffer = []; // Buffer to store audio chunks for voice cloning
+let voiceCloneStartTime = null; // When voice cloning started
+let voiceCloneDuration = 10000; // Capture 10 seconds for voice cloning
+let isVoiceCloning = false; // Whether we're currently capturing for voice cloning
+let voiceCloneComplete = false; // Whether voice cloning has been completed
+let currentPageUrl = null; // Current page URL for voice model storage
+
 // Translation service (frontend translation & TTS)
 let translationPipeline = null;
 let targetLanguage = 'es';
@@ -17,6 +25,15 @@ let targetLanguage = 'es';
 let currentTranscript = { original: '', translation: '' };
 let transcriptTimeout = null;
 const TRANSCRIPT_DEBOUNCE_MS = 500; // Wait 500ms for translation to arrive (reduced from 1000ms)
+
+// Listen for Fish Audio playback events
+window.addEventListener('fish-audio-ready', (event) => {
+  const { audioData } = event.detail;
+  if (audioData) {
+    console.log('[Offscreen] Playing Fish Audio TTS');
+    playPcmChunk(audioData);
+  }
+});
 
 // Initialize translation service
 function initTranslationService() {
@@ -128,17 +145,69 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   } else if (msg.type === 'STOP_CAPTURE') {
     stopCapture();
     sendResponse({ status: 'ok' });
+  } else if (msg.type === 'SET_USE_CLONED_VOICE') {
+    // Update the TTS service to use cloned voice
+    if (translationPipeline && translationPipeline.tts) {
+      const { useClonedVoice, modelId, fishApiKey } = msg;
+      
+      if (useClonedVoice && modelId) {
+        // Initialize Fish Audio with API key if provided
+        if (fishApiKey && translationPipeline.tts.fishTTS) {
+          translationPipeline.tts.fishTTS.initialize(fishApiKey).then(() => {
+            console.log('[Offscreen] Fish Audio TTS initialized with provided API key');
+            translationPipeline.tts.setCustomVoiceModel(modelId);
+            translationPipeline.tts.setUseFishAudio(true);
+            console.log('[Offscreen] Enabled cloned voice:', modelId);
+          }).catch(err => {
+            console.error('[Offscreen] Failed to initialize Fish Audio:', err);
+          });
+        } else {
+          translationPipeline.tts.setCustomVoiceModel(modelId);
+          translationPipeline.tts.setUseFishAudio(true);
+          console.log('[Offscreen] Enabled cloned voice:', modelId);
+        }
+      } else {
+        translationPipeline.tts.setUseFishAudio(false);
+        console.log('[Offscreen] Disabled cloned voice, using default');
+      }
+      
+      sendResponse({ status: 'ok' });
+    } else {
+      sendResponse({ status: 'error', message: 'TTS service not available' });
+    }
+  } else if (msg.type === 'UPDATE_FISH_API_KEY') {
+    // Update Fish Audio API key
+    if (translationPipeline && translationPipeline.tts && translationPipeline.tts.fishTTS) {
+      const { fishApiKey } = msg;
+      translationPipeline.tts.fishTTS.initialize(fishApiKey).then(() => {
+        console.log('[Offscreen] Fish Audio TTS API key updated');
+        sendResponse({ status: 'ok' });
+      }).catch(err => {
+        console.error('[Offscreen] Failed to update API key:', err);
+        sendResponse({ status: 'error', message: err.message });
+      });
+    } else {
+      sendResponse({ status: 'error', message: 'Fish TTS not available' });
+    }
+    return true; // Keep channel open for async response
   }
   return false;
 });
 
 async function startCapture(data) {
   try {
-    const { streamId, targetLang, tabId } = data;
-    console.log("[Offscreen] Starting capture with streamId:", streamId, "tabId:", tabId);
+    const { streamId, targetLang, tabId, pageUrl } = data;
+    console.log("[Offscreen] Starting capture with streamId:", streamId, "tabId:", tabId, "pageUrl:", pageUrl);
     
-    // Store the tab ID for sending mute/unmute messages
+    // Store the tab ID and URL for sending mute/unmute messages and voice cloning
     activeTabId = tabId;
+    currentPageUrl = pageUrl;
+    
+    // Reset voice cloning state
+    voiceCloneBuffer = [];
+    voiceCloneStartTime = null;
+    isVoiceCloning = false;
+    voiceCloneComplete = false;
 
     // Get the media stream using the ID from background
     console.log("[Offscreen] Requesting getUserMedia with tab capture...");
@@ -178,6 +247,12 @@ function stopCapture() {
   
   // Reset transcript accumulation
   currentTranscript = { original: '', translation: '' };
+  
+  // Reset voice cloning state
+  voiceCloneBuffer = [];
+  voiceCloneStartTime = null;
+  isVoiceCloning = false;
+  currentPageUrl = null;
   
   if (socket) {
     socket.close();
@@ -340,7 +415,13 @@ async function setupAudioProcessing(stream, ws) {
           console.log(`[Offscreen] Audio level (peak): ${maxVal.toFixed(4)}`);
         }
         
+        // Send to WebSocket for STT
         ws.send(event.data.data);
+        
+        // Also buffer for voice cloning if active
+        if (isVoiceCloning && !voiceCloneComplete) {
+          bufferAudioForCloning(event.data.data);
+        }
       }
     };
     
@@ -352,6 +433,9 @@ async function setupAudioProcessing(stream, ws) {
     workletNode.connect(audioContext.destination);
     
     console.log("[Offscreen] Audio processing pipeline established");
+    
+    // Start voice cloning capture
+    startVoiceCloning();
     
   } catch (err) {
     console.error("[Offscreen] Failed to setup AudioWorklet:", err);
@@ -476,5 +560,233 @@ function unmuteVideo() {
     });
   } else {
     console.error('[Offscreen] ❌ Cannot unmute: activeTabId is not set!');
+  }
+}
+
+// Voice Cloning Functions
+
+function startVoiceCloning() {
+  console.log('[Offscreen] 🎤 Starting voice cloning capture...');
+  isVoiceCloning = true;
+  voiceCloneStartTime = Date.now();
+  voiceCloneBuffer = [];
+  
+  // Notify UI that voice cloning has started
+  chrome.runtime.sendMessage({
+    type: 'VOICE_CLONE_STATUS',
+    status: 'capturing',
+    message: 'Capturing voice for cloning...'
+  }).catch(() => {});
+  
+  // Set timeout to stop buffering after configured duration
+  setTimeout(() => {
+    if (isVoiceCloning && !voiceCloneComplete) {
+      finishVoiceCloning();
+    }
+  }, voiceCloneDuration);
+}
+
+function bufferAudioForCloning(pcmData) {
+  // Only buffer if we haven't exceeded the duration
+  const elapsed = Date.now() - voiceCloneStartTime;
+  if (elapsed < voiceCloneDuration) {
+    // Store a copy of the audio data
+    voiceCloneBuffer.push(new Uint8Array(pcmData));
+  }
+}
+
+function finishVoiceCloning() {
+  console.log('[Offscreen] 🎤 Voice cloning capture finished');
+  isVoiceCloning = false;
+  voiceCloneComplete = true;
+  
+  // Check if we have enough audio
+  if (voiceCloneBuffer.length === 0) {
+    console.error('[Offscreen] No audio captured for voice cloning');
+    chrome.runtime.sendMessage({
+      type: 'VOICE_CLONE_STATUS',
+      status: 'error',
+      message: 'No audio captured for voice cloning'
+    }).catch(() => {});
+    return;
+  }
+  
+  console.log(`[Offscreen] Captured ${voiceCloneBuffer.length} audio chunks`);
+  
+  // Notify UI that we're processing
+  chrome.runtime.sendMessage({
+    type: 'VOICE_CLONE_STATUS',
+    status: 'processing',
+    message: 'Creating voice model...'
+  }).catch(() => {});
+  
+  // Convert to WAV and send to backend
+  createWavAndSendToBackend();
+}
+
+function createWavAndSendToBackend() {
+  try {
+    // Concatenate all audio chunks
+    let totalLength = 0;
+    voiceCloneBuffer.forEach(chunk => {
+      totalLength += chunk.length;
+    });
+    
+    // Create a single buffer with all audio data
+    const concatenated = new Uint8Array(totalLength);
+    let offset = 0;
+    voiceCloneBuffer.forEach(chunk => {
+      concatenated.set(chunk, offset);
+      offset += chunk.length;
+    });
+    
+    // Convert to Int16Array (PCM data is already in int16 format from worklet)
+    const pcmData = new Int16Array(concatenated.buffer);
+    
+    // Create WAV file
+    const sampleRate = audioContext ? audioContext.sampleRate : 16000;
+    const wavData = createWavFile(pcmData, sampleRate);
+    
+    console.log(`[Offscreen] Created WAV file: ${wavData.byteLength} bytes, ${sampleRate}Hz`);
+    
+    // Send to backend
+    sendVoiceCloneToBackend(wavData);
+    
+  } catch (error) {
+    console.error('[Offscreen] Error creating WAV file:', error);
+    chrome.runtime.sendMessage({
+      type: 'VOICE_CLONE_STATUS',
+      status: 'error',
+      message: 'Failed to process audio: ' + error.message
+    }).catch(() => {});
+  }
+}
+
+function createWavFile(pcmData, sampleRate) {
+  // WAV file format:
+  // - RIFF header
+  // - fmt chunk
+  // - data chunk
+  
+  const numChannels = 1; // Mono
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const dataSize = pcmData.length * 2; // 2 bytes per sample (16-bit)
+  
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  
+  // RIFF header
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(view, 8, 'WAVE');
+  
+  // fmt chunk
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true); // fmt chunk size
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  
+  // data chunk
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+  
+  // Write PCM data
+  const dataView = new Int16Array(buffer, 44);
+  dataView.set(pcmData);
+  
+  return buffer;
+}
+
+function writeString(view, offset, string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
+async function sendVoiceCloneToBackend(wavData) {
+  try {
+    console.log('[Offscreen] Sending voice clone to backend...');
+    
+    // Update status to processing
+    chrome.runtime.sendMessage({
+      type: 'VOICE_CLONE_STATUS',
+      status: 'processing',
+      message: 'Creating voice model...'
+    }).catch(() => {});
+    
+    // Create form data
+    const formData = new FormData();
+    const blob = new Blob([wavData], { type: 'audio/wav' });
+    formData.append('audio', blob, 'voice-clone.wav');
+    formData.append('url', currentPageUrl || window.location.href);
+    
+    // Extract hostname for title
+    let hostname = 'Unknown';
+    try {
+      const url = new URL(currentPageUrl || window.location.href);
+      hostname = url.hostname;
+    } catch (e) {
+      console.warn('[Offscreen] Could not parse URL for hostname');
+    }
+    formData.append('title', `Cloned Voice - ${hostname}`);
+    
+    console.log('[Offscreen] Uploading to backend...', {
+      url: currentPageUrl,
+      hostname,
+      audioSize: wavData.byteLength
+    });
+    
+    // Send to backend
+    const response = await fetch('http://localhost:8000/api/clone-voice', {
+      method: 'POST',
+      body: formData
+    });
+    
+    console.log('[Offscreen] Backend response status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Backend returned ${response.status}: ${errorText}`);
+    }
+    
+    const result = await response.json();
+    console.log('[Offscreen] Voice clone response:', result);
+    
+    if (result.status === 'success' && result.data) {
+      console.log('[Offscreen] ✅ Voice model created:', result.data.model_id);
+      
+      // Notify background to store the model and show notification
+      await chrome.runtime.sendMessage({
+        type: 'VOICE_CLONE_COMPLETE',
+        data: {
+          model_id: result.data.model_id,
+          url: currentPageUrl,
+          title: result.data.title,
+          hostname: result.data.hostname
+        }
+      });
+      
+      console.log('[Offscreen] ✅ Voice cloning complete and notification sent!');
+    } else {
+      throw new Error('Backend returned non-success status or missing data');
+    }
+    
+  } catch (error) {
+    console.error('[Offscreen] Failed to send voice clone to backend:', error);
+    console.error('[Offscreen] Error details:', error.stack);
+    
+    chrome.runtime.sendMessage({
+      type: 'VOICE_CLONE_STATUS',
+      status: 'error',
+      message: 'Failed to create voice model: ' + error.message
+    }).catch(err => {
+      console.error('[Offscreen] Failed to send error status:', err);
+    });
   }
 }

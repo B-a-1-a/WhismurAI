@@ -55,6 +55,72 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     return true;
   }
 
+  if (req?.type === 'VOICE_CLONE_STATUS') {
+    // Forward voice cloning status to popup
+    console.log('[Background] Voice clone status:', req.status, req.message);
+    // Broadcast to all extension pages (popup, etc.)
+    chrome.runtime.sendMessage(req).catch(() => {});
+    sendResponse({ status: 'ok' });
+    return true;
+  }
+
+  if (req?.type === 'VOICE_CLONE_COMPLETE') {
+    // Voice cloning completed - store the model and show notification
+    (async () => {
+      try {
+        const { model_id, url, title, hostname } = req.data;
+        console.log('[Background] Voice clone complete:', model_id, 'for', hostname);
+        
+        // Store voice model in chrome.storage
+        const result = await chrome.storage.local.get(['voiceModels']);
+        const voiceModels = result.voiceModels || {};
+        
+        // Use URL as key
+        voiceModels[url] = {
+          model_id,
+          title,
+          hostname,
+          created_at: Date.now()
+        };
+        
+        await chrome.storage.local.set({ voiceModels });
+        console.log('[Background] Voice model stored for:', hostname);
+        
+        // Show browser notification (without icon to avoid SVG issues)
+        try {
+          await chrome.notifications.create({
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icon.svg'),
+            title: 'Voice Cloned Successfully! 🎤',
+            message: `Voice from ${hostname} has been cloned. You can now enable it in the popup.`,
+            priority: 2,
+            requireInteraction: false
+          });
+        } catch (notifError) {
+          console.warn('[Background] Notification failed (non-critical):', notifError);
+          // Continue even if notification fails
+        }
+        
+        // Broadcast to popup and all extension pages
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'VOICE_MODEL_AVAILABLE',
+            data: { model_id, url, title, hostname }
+          });
+          console.log('[Background] Broadcast VOICE_MODEL_AVAILABLE message');
+        } catch (broadcastError) {
+          console.log('[Background] No listeners for VOICE_MODEL_AVAILABLE (popup may be closed)');
+        }
+        
+        sendResponse({ status: 'saved' });
+      } catch (error) {
+        console.error('[Background] Failed to save voice model:', error);
+        sendResponse({ status: 'error', message: error.message });
+      }
+    })();
+    return true;
+  }
+
   if (req?.type === 'SAVE_TRANSCRIPT') {
     // Handle transcript storage from offscreen document
     (async () => {
@@ -199,7 +265,7 @@ async function startCapture(targetLang) {
       return;
     }
 
-    console.log("[Background] Capturing audio from tab:", tab.id);
+    console.log("[Background] Capturing audio from tab:", tab.id, "URL:", tab.url);
     capturedTabId = tab.id; // Store tab ID for later unmuting
     
     const streamId = await new Promise((resolve, reject) => {
@@ -216,10 +282,10 @@ async function startCapture(targetLang) {
 
     console.log("[Background] Got stream ID:", streamId);
 
-    // Send stream ID and tab ID to offscreen document
+    // Send stream ID, tab ID, and page URL to offscreen document
     await sendMessageToOffscreen({
       type: 'START_CAPTURE',
-      data: { streamId, targetLang, tabId: tab.id }
+      data: { streamId, targetLang, tabId: tab.id, pageUrl: tab.url }
     });
 
   } catch (error) {

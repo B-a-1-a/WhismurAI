@@ -55,7 +55,7 @@ pip install -r requirements.txt
 
 # Create .env file with your API keys
 cat > .env << EOF
-FISH_API_KEY=your_fish_api_key_here
+FISH_AUDIO_API_KEY=your_fish_audio_api_key_here
 DEEPGRAM_API_KEY=your_deepgram_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 EOF
@@ -93,7 +93,11 @@ npm run build
 3. **Open Extension:** Click the WhismurAI icon in your Chrome toolbar
 4. **Select Language:** Choose your target translation language
 5. **Start Translation:** Click "Start Translation" to begin real-time translation
-6. **Stop Translation:** Click "Stop Translation" when done
+6. **Voice Cloning (Automatic):** The extension automatically captures the first 10 seconds to clone the speaker's voice
+7. **Enable Cloned Voice:** Once cloning completes, toggle the switch to use the cloned voice for translations
+8. **Stop Translation:** Click "Stop Translation" when done
+
+See the [Voice Cloning Setup Guide](./VOICE_CLONING_SETUP.md) for detailed information about voice cloning features.
 
 ## API Keys Required
 
@@ -105,6 +109,7 @@ You'll need to obtain API keys from:
 
 ## Documentation
 
+- **[Voice Cloning Setup Guide](./VOICE_CLONING_SETUP.md)** - Complete guide to setting up and using automatic voice cloning
 - **[Translation Implementation Guide](./TRANSLATION_IMPLEMENTATION.md)** - Detailed explanation of the translation pipeline, optimizations, and performance tuning
 - **[Backend Setup](./backend/README.md)** - Backend configuration and architecture details
 - **[Extension Setup](./extension/README.md)** - Chrome extension development guide
@@ -135,17 +140,20 @@ After making changes, rebuild the extension and click the refresh icon in `chrom
 - ✅ Speech-to-Text using Deepgram (optimized for low latency)
 - ✅ **Ultra-fast translation using OpenAI gpt-5-nano** (< 1s latency, 5/5 speed rating)
 - ✅ Natural Text-to-Speech using Fish Audio with voice cloning
+- ✅ **🆕 Automatic Voice Cloning** - Clone speaker voices from tab audio and use them for translations
 - ✅ Support for 20+ languages (Spanish, French, German, Japanese, Chinese, Korean, Italian, Portuguese, Arabic, Hindi, and more)
 - ✅ Clean, modern UI with Tailwind CSS
 - ✅ Optimized pipeline for near-instant translation
+- ✅ Per-URL voice model persistence
 
 ## Future Enhancements
 
-- Voice cloning for personalized translation voices
-- Multiple voice profiles
-- Translation history
+- Multiple voice profiles per URL
+- Voice model management UI
+- Translation history export
 - Offline mode support
 - Additional language support
+- Custom voice training with longer samples
 
 ## License
 

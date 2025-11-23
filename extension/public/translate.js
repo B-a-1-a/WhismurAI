@@ -118,7 +118,7 @@ class TranslationService {
     }
 }
 
-// Text-to-Speech Service using Web Speech API
+// Text-to-Speech Service using Fish Audio API or Web Speech API fallback
 class TTSService {
     constructor() {
         this.synth = window.speechSynthesis;
@@ -127,6 +127,81 @@ class TTSService {
         this.rate = 1.0;
         this.pitch = 1.0;
         this.volume = 1.0;
+        
+        // Fish Audio TTS integration
+        this.fishTTS = null;
+        this.useFishAudio = false;
+        this.fishApiKey = null;
+        this.initializeFishAudio();
+    }
+    
+    // Initialize Fish Audio TTS if available
+    async initializeFishAudio() {
+        try {
+            // Check if FishAudioTTS is available
+            if (typeof FishAudioTTS !== 'undefined') {
+                this.fishTTS = new FishAudioTTS();
+                
+                // Check if chrome.storage is available (not available in offscreen documents)
+                if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                    try {
+                        const result = await chrome.storage.local.get(['fishApiKey']);
+                        if (result.fishApiKey) {
+                            this.fishApiKey = result.fishApiKey;
+                            await this.fishTTS.initialize(this.fishApiKey);
+                            console.log('[TTSService] Fish Audio TTS initialized with API key');
+                        } else {
+                            console.log('[TTSService] No Fish API key found in storage');
+                        }
+                    } catch (storageError) {
+                        console.warn('[TTSService] Cannot access chrome.storage (offscreen document limitation)');
+                    }
+                } else {
+                    console.log('[TTSService] chrome.storage not available (using Web Speech API only)');
+                }
+            }
+        } catch (error) {
+            console.warn('[TTSService] Fish Audio TTS initialization failed:', error.message);
+        }
+    }
+    
+    // Set Fish Audio API key
+    async setFishApiKey(apiKey) {
+        this.fishApiKey = apiKey;
+        
+        // Try to save to storage if available
+        try {
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                await chrome.storage.local.set({ fishApiKey });
+            }
+        } catch (e) {
+            // Storage not available, just keep in memory
+            console.log('[TTSService] Storing API key in memory only');
+        }
+        
+        if (this.fishTTS) {
+            await this.fishTTS.initialize(apiKey);
+            this.useFishAudio = true;
+            console.log('[TTSService] Fish Audio initialized with new API key');
+        }
+    }
+    
+    // Set custom voice model
+    setCustomVoiceModel(modelId) {
+        if (this.fishTTS) {
+            this.fishTTS.setCustomVoice(modelId);
+            this.useFishAudio = true;
+            console.log('[TTSService] Custom voice model set:', modelId);
+        }
+    }
+    
+    // Toggle Fish Audio TTS
+    setUseFishAudio(use) {
+        if (this.fishTTS && this.fishTTS.hasCustomVoice()) {
+            this.useFishAudio = use;
+            this.fishTTS.setUseCustomVoice(use);
+            console.log('[TTSService] Use Fish Audio:', use);
+        }
     }
 
     // Get available voices for a language
@@ -147,10 +222,23 @@ class TTSService {
     }
 
     // Speak translated text
-    speak(text, lang) {
+    async speak(text, lang) {
         // Cancel any ongoing speech
         this.stop();
 
+        // Try Fish Audio TTS first if available and enabled
+        if (this.useFishAudio && this.fishTTS && this.fishTTS.hasCustomVoice()) {
+            try {
+                console.log('[TTSService] Using Fish Audio TTS');
+                await this.speakWithFishAudio(text);
+                return;
+            } catch (error) {
+                console.error('[TTSService] Fish Audio TTS failed, falling back to Web Speech:', error);
+                // Fall through to Web Speech API
+            }
+        }
+
+        // Use Web Speech API as fallback
         const utterance = new SpeechSynthesisUtterance(text);
         
         // Set language
@@ -189,6 +277,25 @@ class TTSService {
 
         this.currentUtterance = utterance;
         this.synth.speak(utterance);
+    }
+    
+    // Speak using Fish Audio TTS
+    async speakWithFishAudio(text) {
+        try {
+            // Generate speech audio
+            const audioData = await this.fishTTS.generateSpeech(text);
+            
+            // Play the audio using the same playback context as in offscreen.js
+            // We'll dispatch a custom event that offscreen.js can listen to
+            window.dispatchEvent(new CustomEvent('fish-audio-ready', {
+                detail: { audioData }
+            }));
+            
+            console.log('[TTSService] Fish Audio speech generated');
+        } catch (error) {
+            console.error('[TTSService] Fish Audio speech generation failed:', error);
+            throw error;
+        }
     }
 
     // Stop current speech
