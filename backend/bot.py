@@ -3,7 +3,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineTask
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.fish.tts import FishTTSService
+from pipecat.services.fish.tts import FishAudioTTSService
 from pipecat.transports.network.websocket_server import WebSocketServerTransport, WebSocketServerParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
@@ -35,7 +35,7 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     )
     
     # Text-to-Speech: Fish Audio (using the provided reference_id)
-    tts = FishTTSService(
+    tts = FishAudioTTSService(
         api_key=os.getenv("FISH_API_KEY"),
         reference_id=reference_id,
         latency="balanced"
