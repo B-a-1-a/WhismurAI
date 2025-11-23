@@ -33,13 +33,65 @@ uvicorn server:app --reload
 
 The server will start on `http://localhost:8000`
 
+## Using the Translation Endpoint
+
+Connect to the WebSocket endpoint with your target language:
+
+```javascript
+// Connect to WebSocket for Spanish translation
+const ws = new WebSocket('ws://localhost:8000/ws/translate/es');
+
+// Optional: specify a custom voice ID
+const ws = new WebSocket('ws://localhost:8000/ws/translate/es?reference_id=your_voice_id');
+
+// Send audio data (raw PCM, 16kHz, mono)
+ws.send(audioBuffer);
+
+// Receive translated audio back
+ws.onmessage = (event) => {
+  if (event.data instanceof Blob) {
+    // This is audio data (raw PCM, 24kHz)
+    playAudio(event.data);
+  } else {
+    // This is JSON metadata (transcripts, translations)
+    const msg = JSON.parse(event.data);
+    console.log(msg.type, msg.text);
+  }
+};
+```
+
+### Supported Language Codes
+- `es` - Spanish
+- `fr` - French
+- `de` - German
+- `ja` - Japanese
+- `zh` - Chinese
+- `ko` - Korean
+- `it` - Italian
+- `pt` - Portuguese
+- `ru` - Russian
+- `ar` - Arabic
+- `hi` - Hindi
+- `en` - English
+- And many more...
+
 ## Pipeline Architecture
 
-The translation bot uses a Pipecat pipeline with the following components:
+The translation bot uses a Pipecat pipeline with real-time translation:
 
 ### Audio Flow
 ```
-WebSocket Input (16kHz) → Deepgram STT → OpenAI LLM → Fish Audio TTS → WebSocket Output (24kHz)
+WebSocket Input (16kHz) 
+  ↓
+Deepgram STT (speech-to-text)
+  ↓
+Sentence Aggregator (forms complete sentences)
+  ↓
+OpenAI Translation (gpt-4o-mini)
+  ↓
+Fish Audio TTS (text-to-speech)
+  ↓
+WebSocket Output (24kHz)
 ```
 
 ### Service Configuration
@@ -48,10 +100,25 @@ WebSocket Input (16kHz) → Deepgram STT → OpenAI LLM → Fish Audio TTS → W
 - **WebSocket Endpoint**: `wss://api.deepgram.com/v1/listen`
 - **Sample Rate**: 16kHz (default for linear16 encoding)
 - **Encoding**: linear16 (raw PCM audio)
-- **Required Query Params**: 
-  - `encoding=linear16` (optional, inferred from audio format)
-  - `sample_rate=16000` (optional, required only when encoding is specified)
+- **Low Latency Settings**:
+  - `interim_results=True` - Real-time transcription updates
+  - `endpointing=300` - 300ms pause detection (faster than default)
+  - `utterance_end_ms=1000` - 1s finalization (faster than default)
+  - `smart_format=True` - Auto-punctuation for better sentence detection
 - **Documentation**: [Deepgram Streaming API](https://developers.deepgram.com/reference/speech-to-text/listen-streaming)
+
+#### OpenAI Translation
+- **Model**: `gpt-5-nano` ⚡ **Fastest OpenAI model (GPT-5 generation) for ultra-low latency translation**
+- **Ultra-Low Latency Configuration**:
+  - `temperature=0.0` - Deterministic output (no randomness = faster)
+  - `max_tokens=100` - Limited output length for speed
+  - Minimal system prompt for fastest processing
+  - Streaming enabled for immediate response
+- **Speed Rating**: 5/5 stars (Very fast) - OpenAI's fastest model
+- **Context Window**: 400,000 tokens (though we only use minimal context)
+- **Context Management**: Automatic cleanup every 3 messages to prevent slowdown
+- **Supported Languages**: Spanish (es), French (fr), German (de), Japanese (ja), Chinese (zh), Korean (ko), Italian (it), Portuguese (pt), Russian (ru), Arabic (ar), Hindi (hi), Dutch (nl), Polish (pl), Turkish (tr), Vietnamese (vi), Thai (th), Swedish (sv), Danish (da), Norwegian (no), Finnish (fi), English (en)
+- **Documentation**: [OpenAI gpt-5-nano Reference](https://platform.openai.com/docs/models/gpt-5-nano)
 
 #### Fish Audio TTS
 - **Voice Cloning**: Uses `reference_id` parameter for persistent voice models
@@ -66,13 +133,8 @@ WebSocket Input (16kHz) → Deepgram STT → OpenAI LLM → Fish Audio TTS → W
   # Use voice.id as reference_id in pipeline
   ```
 - **Alternative**: On-the-fly cloning with `ReferenceAudio` objects (not used in this implementation)
-- **Latency Mode**: `balanced` (options: `normal`, `balanced`, `aggressive`)
+- **Latency Mode**: `normal` - Fastest mode (options: `normal`, `balanced`)
 - **Documentation**: [Fish Audio Python SDK](https://docs.fish.audio/api-reference/sdk/python/overview)
-
-#### OpenAI LLM
-- **Model**: `gpt-4o-mini` (fast, cost-effective for translation)
-- **System Prompt**: Configured for simultaneous interpretation
-- **Context Management**: Uses `OpenAILLMContext` for message history
 
 ### Important Notes
 

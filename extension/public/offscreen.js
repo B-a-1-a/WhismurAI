@@ -9,10 +9,95 @@ let nextStartTime = 0; // Track when the next chunk should play
 let isPlayingAudio = false; // Track if TTS audio is currently playing
 let activeTabId = null; // Track the current tab ID for sending messages
 
+// Translation service (frontend translation & TTS)
+let translationPipeline = null;
+let targetLanguage = 'es';
+
 // Transcript aggregation state
 let currentTranscript = { original: '', translation: '' };
 let transcriptTimeout = null;
 const TRANSCRIPT_DEBOUNCE_MS = 500; // Wait 500ms for translation to arrive (reduced from 1000ms)
+
+// Initialize translation service
+function initTranslationService() {
+  try {
+    // Wait for DOM to be ready
+    if (typeof TranslationPipeline !== 'undefined') {
+      translationPipeline = new TranslationPipeline(targetLanguage);
+      console.log('[Offscreen] Translation pipeline initialized for:', targetLanguage);
+      
+      // Listen for translation events
+      window.addEventListener('translation', (event) => {
+        const { text, isFinal, language } = event.detail;
+        console.log('[Offscreen] Translation received:', text.substring(0, 50));
+        
+        if (isFinal) {
+          currentTranscript.translation = text;
+          
+          // Save transcript pair
+          if (currentTranscript.original) {
+            saveTranscriptPair();
+          }
+        } else {
+          // Show interim translation
+          chrome.runtime.sendMessage({
+            type: 'TRANSCRIPT_INTERIM',
+            data: {
+              text: text,
+              mode: 'translation'
+            }
+          }).catch(() => {});
+        }
+      });
+    } else {
+      // Try again after a short delay if TranslationPipeline not loaded yet
+      setTimeout(initTranslationService, 100);
+    }
+  } catch (error) {
+    console.error('[Offscreen] Failed to initialize translation service:', error);
+  }
+}
+
+// Save transcript pair to storage and broadcast
+function saveTranscriptPair() {
+  clearTimeout(transcriptTimeout);
+  
+  const hasOriginal = currentTranscript.original && currentTranscript.original.trim().length > 0;
+  const hasTranslation = currentTranscript.translation && currentTranscript.translation.trim().length > 0;
+  
+  if (hasOriginal || hasTranslation) {
+    const transcriptPair = {
+      original: currentTranscript.original.trim(),
+      translation: currentTranscript.translation.trim(),
+      timestamp: Date.now()
+    };
+    
+    console.log('[Offscreen] ✅ Saving transcript pair:', {
+      original: transcriptPair.original.substring(0, 60) + '...',
+      translation: transcriptPair.translation.substring(0, 60) + '...'
+    });
+    
+    appendTranscript(transcriptPair);
+    
+    // Broadcast to popup
+    chrome.runtime.sendMessage({
+      type: 'TRANSCRIPT_UPDATE',
+      data: transcriptPair
+    }).catch(err => console.log('[Offscreen] Failed to broadcast:', err));
+    
+    // Clear interim display
+    chrome.runtime.sendMessage({
+      type: 'TRANSCRIPT_INTERIM',
+      data: null
+    }).catch(() => {});
+    
+    // Reset for next transcript
+    currentTranscript = { original: '', translation: '' };
+  }
+}
+
+// Initialize on load
+initTranslationService();
 
 notifyBackgroundReady();
 
@@ -136,81 +221,72 @@ async function connectSocket(stream, targetLang) {
     await setupAudioProcessing(stream, socket);
   };
   
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     if (typeof event.data === 'string') {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'transcript') {
-          const isFinal = data.is_final !== undefined ? data.is_final : true; // Default to true for backward compatibility
-          console.log(`[Offscreen] Transcript chunk (${data.mode}, final=${isFinal}):`, data.text);
+        
+        // Handle configuration message
+        if (data.type === 'config') {
+          targetLanguage = data.target_language;
+          console.log('[Offscreen] Config received - target language:', targetLanguage);
           
-          // Only process FINAL transcripts to avoid overlaps and repetition
+          if (translationPipeline) {
+            translationPipeline.setTargetLanguage(targetLanguage);
+          }
+          return;
+        }
+        
+        // Handle transcript from backend (STT only)
+        if (data.type === 'transcript') {
+          const isFinal = data.is_final !== undefined ? data.is_final : true;
+          const text = data.text;
+          
+          console.log(`[Offscreen] Transcript (final=${isFinal}):`, text.substring(0, 80));
+          
+          // Store original transcript
           if (isFinal) {
-            if (data.mode === 'original') {
-              currentTranscript.original = data.text;  // Replace with complete sentence
-              console.log('[Offscreen] 📝 FINAL original received:', data.text.substring(0, 80));
-            } else if (data.mode === 'translation') {
-              currentTranscript.translation = data.text;  // Replace with complete translation
-              console.log('[Offscreen] 🌐 FINAL translation received:', data.text.substring(0, 80));
-            }
+            currentTranscript.original = text;
+            console.log('[Offscreen] 📝 FINAL original received:', text.substring(0, 80));
             
-            // Clear interim display when we get a final chunk
-            chrome.runtime.sendMessage({
-                type: 'TRANSCRIPT_INTERIM',
-                data: null
-            }).catch(() => {}); // Ignore errors if popup is closed
-
-            // Immediately save when we get a final pair
-            // (or wait briefly for the translation to arrive)
-            clearTimeout(transcriptTimeout);
-            transcriptTimeout = setTimeout(() => {
-              const hasOriginal = currentTranscript.original && currentTranscript.original.trim().length > 0;
-              const hasTranslation = currentTranscript.translation && currentTranscript.translation.trim().length > 0;
-              
-              if (hasOriginal || hasTranslation) {
-                const transcriptPair = {
-                  original: currentTranscript.original.trim(),
-                  translation: currentTranscript.translation.trim(),
-                  timestamp: Date.now()
-                };
-                
-                console.log('[Offscreen] ✅ Saving complete transcript pair:', {
-                  original: transcriptPair.original.substring(0, 60) + '...',
-                  translation: transcriptPair.translation.substring(0, 60) + '...'
-                });
-                appendTranscript(transcriptPair);
-                
-                // Broadcast to popup
-                chrome.runtime.sendMessage({
-                  type: 'TRANSCRIPT_UPDATE',
-                  data: transcriptPair
-                }).catch(err => console.log('[Offscreen] Failed to broadcast:', err));
-                
-                // Reset for next transcript
-                currentTranscript = { original: '', translation: '' };
+            // Translate using frontend service
+            if (translationPipeline && text.trim()) {
+              try {
+                await translationPipeline.processTranscript(text, true);
+              } catch (error) {
+                console.error('[Offscreen] Translation failed:', error);
+                // Save without translation if it fails
+                saveTranscriptPair();
               }
-            }, 500);  // Shorter timeout (500ms) since we're only waiting for translation
+            } else {
+              // No translation service, just save original
+              saveTranscriptPair();
+            }
           } else {
-            // Show interim results (sentence being built) but don't save them
-            console.log(`[Offscreen] 🔨 Building sentence (${data.mode}): ${data.text.substring(0, 50)}...`);
+            // Show interim transcript
+            console.log(`[Offscreen] 🔨 Building: ${text.substring(0, 50)}...`);
             
             // Broadcast interim to popup
             chrome.runtime.sendMessage({
                 type: 'TRANSCRIPT_INTERIM',
                 data: {
-                    text: data.text,
-                    mode: data.mode
+                text: text,
+                mode: 'original'
                 }
-            }).catch(() => {}); // Ignore errors if popup is closed
+            }).catch(() => {});
+            
+            // Optionally translate interim (debounced)
+            if (translationPipeline && text.trim()) {
+              translationPipeline.processTranscript(text, false).catch(console.error);
+            }
           }
         }
       } catch (e) {
         console.error("[Offscreen] Failed to parse JSON:", e);
       }
     } else {
-      // Received audio chunk from TTS - play it
-      console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
-      playPcmChunk(event.data);
+      // Backend no longer sends audio (we use frontend TTS)
+      console.warn("[Offscreen] Received unexpected binary data");
     }
   };
 

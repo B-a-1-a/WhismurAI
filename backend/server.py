@@ -1,7 +1,7 @@
 import os
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from bot import run_translation_bot
+from bot_simplified import run_stt_pipeline  # Simplified STT-only pipeline
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -17,16 +17,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Default Generic Voice ID from Fish Audio
-# Replace this with a real voice ID from your Fish Audio console
-DEFAULT_VOICE_ID = "7f92f8afb8ec43bf81429cc1c9199cb1"
-
 @app.get("/")
 async def root():
     """Health check endpoint"""
     return {
         "status": "running",
-        "service": "Live Translation Backend",
+        "service": "Live Translation Backend (STT Only)",
+        "version": "2.0",
+        "info": "Translation and TTS handled by frontend for better performance",
         "endpoints": {
             "websocket": "/ws/translate/{target_lang}"
         }
@@ -35,30 +33,40 @@ async def root():
 @app.websocket("/ws/translate/{target_lang}")
 async def websocket_endpoint(websocket: WebSocket, target_lang: str):
     """
-    WebSocket endpoint for real-time translation
+    WebSocket endpoint for real-time speech-to-text
+    Frontend handles translation and TTS for better performance
     
     Args:
         target_lang: Target language code (e.g., 'es', 'fr', 'de', 'ja')
-    
-    Query Parameters:
-        reference_id: Optional Fish Audio voice ID (defaults to DEFAULT_VOICE_ID)
+                    This is sent to frontend for translation configuration
     """
     await websocket.accept()
-    
-    # Get voice reference ID from query params, or use default
-    ref_id = websocket.query_params.get("reference_id", DEFAULT_VOICE_ID)
     
     print(f"\n{'='*60}")
     print(f"[WebSocket] New connection established")
     print(f"[WebSocket] Target Language: {target_lang}")
-    print(f"[WebSocket] Voice ID: {ref_id}")
+    print(f"[WebSocket] Mode: STT Only (Frontend Translation)")
     print(f"{'='*60}\n")
     
     try:
-        await run_translation_bot(websocket, ref_id, target_lang)
+        # Send target language to frontend
+        await websocket.send_json({
+            "type": "config",
+            "target_language": target_lang,
+            "source_language": "en"
+        })
+        
+        # Run simplified STT-only pipeline
+        await run_stt_pipeline(websocket)
+        
+    except WebSocketDisconnect:
+        print(f"[WebSocket] Client disconnected")
     except Exception as e:
         print(f"[WebSocket] Error: {e}")
         import traceback
         traceback.print_exc()
-        await websocket.close()
+        try:
+            await websocket.close()
+        except:
+            pass
 

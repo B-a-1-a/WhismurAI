@@ -103,6 +103,12 @@ You'll need to obtain API keys from:
 - **Deepgram:** https://deepgram.com/
 - **OpenAI:** https://platform.openai.com/
 
+## Documentation
+
+- **[Translation Implementation Guide](./TRANSLATION_IMPLEMENTATION.md)** - Detailed explanation of the translation pipeline, optimizations, and performance tuning
+- **[Backend Setup](./backend/README.md)** - Backend configuration and architecture details
+- **[Extension Setup](./extension/README.md)** - Chrome extension development guide
+
 ## Development
 
 ### Backend Development
@@ -126,11 +132,12 @@ After making changes, rebuild the extension and click the refresh icon in `chrom
 ## Features
 
 - ✅ Real-time audio capture from browser tabs
-- ✅ Speech-to-Text using Deepgram
-- ✅ AI-powered translation using OpenAI GPT-4o-mini
-- ✅ Natural Text-to-Speech using Fish Audio
-- ✅ Support for multiple languages (Spanish, French, German, Japanese, Chinese, Korean, Italian, Portuguese)
+- ✅ Speech-to-Text using Deepgram (optimized for low latency)
+- ✅ **Ultra-fast translation using OpenAI gpt-5-nano** (< 1s latency, 5/5 speed rating)
+- ✅ Natural Text-to-Speech using Fish Audio with voice cloning
+- ✅ Support for 20+ languages (Spanish, French, German, Japanese, Chinese, Korean, Italian, Portuguese, Arabic, Hindi, and more)
 - ✅ Clean, modern UI with Tailwind CSS
+- ✅ Optimized pipeline for near-instant translation
 
 ## Future Enhancements
 

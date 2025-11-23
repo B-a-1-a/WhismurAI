@@ -81,11 +81,23 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   }
 
   if (req?.type === 'MUTE_TAB_VIDEO') {
-    // Forward mute request to content script in the specified tab
-    console.log('[Background] Forwarding MUTE_VIDEO to tab:', req.tabId);
-    chrome.tabs.sendMessage(req.tabId, { type: 'MUTE_VIDEO' })
+    // Forward mute request to content script in ALL frames of the tab
+    console.log('[Background] Broadcasting MUTE_VIDEO to all frames in tab:', req.tabId);
+    
+    // Send to all frames (Chrome will broadcast to all content scripts in this tab)
+    chrome.tabs.sendMessage(req.tabId, { type: 'MUTE_VIDEO' }, { frameId: undefined })
       .then(() => {
-        console.log('[Background] Mute message sent successfully');
+        console.log('[Background] Mute message broadcast successfully');
+        
+        // Also retry after delays to catch late-loading iframes
+        setTimeout(() => {
+          chrome.tabs.sendMessage(req.tabId, { type: 'MUTE_VIDEO' }).catch(() => {});
+        }, 1000);
+        
+        setTimeout(() => {
+          chrome.tabs.sendMessage(req.tabId, { type: 'MUTE_VIDEO' }).catch(() => {});
+        }, 3000);
+        
         sendResponse({ status: 'ok' });
       })
       .catch(err => {
@@ -96,11 +108,11 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   }
 
   if (req?.type === 'UNMUTE_TAB_VIDEO') {
-    // Forward unmute request to content script in the specified tab
-    console.log('[Background] Forwarding UNMUTE_VIDEO to tab:', req.tabId);
-    chrome.tabs.sendMessage(req.tabId, { type: 'UNMUTE_VIDEO' })
+    // Forward unmute request to content script in ALL frames of the tab
+    console.log('[Background] Broadcasting UNMUTE_VIDEO to all frames in tab:', req.tabId);
+    chrome.tabs.sendMessage(req.tabId, { type: 'UNMUTE_VIDEO' }, { frameId: undefined })
       .then(() => {
-        console.log('[Background] Unmute message sent successfully');
+        console.log('[Background] Unmute message broadcast successfully');
         sendResponse({ status: 'ok' });
       })
       .catch(err => {
