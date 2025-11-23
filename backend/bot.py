@@ -169,7 +169,7 @@ class TranslationSender(FrameProcessor):
                             "text": final_text,
                         "is_final": True
                     })
-                        print(f"[TranslationSender] Sent final translation: {final_text[:50]}...")
+                    print(f"[TranslationSender] Sent final translation: {final_text[:50]}...")
                 
                 # Reset buffers for next translation
                 self.translation_buffer = ""
