@@ -299,13 +299,13 @@ function playPcmChunk(data) {
       playbackContext.resume();
     }
 
-    // Mute video when we start playing TTS audio (if not already muted)
+    // Track that we're playing TTS audio (but don't mute original audio)
     if (!isPlayingAudio) {
       console.log(
-        "[Offscreen] 🎵 First TTS audio chunk, ensuring video is muted..."
+        "[Offscreen] 🎵 First TTS audio chunk received, playing alongside original audio..."
       );
       isPlayingAudio = true;
-      muteVideo();
+      // Removed muteVideo() call - keep original audio playing
     }
 
     if (data instanceof Blob) {
@@ -361,8 +361,7 @@ function processPcmData(buffer) {
   // At 1.25x speed, audio takes less time to play
   nextStartTime += audioBuffer.duration / 1.25;
 
-  // When audio finishes playing, check if we should unmute
-  // Note: We keep video muted until session ends for better UX
+  // When audio finishes playing, track state
   source.onended = () => {
     // Check if this is the last scheduled chunk
     const timeSinceLastScheduled = playbackContext.currentTime - nextStartTime;
@@ -374,7 +373,7 @@ function processPcmData(buffer) {
       // Small tolerance
       console.log("[Offscreen] 🎵 Last TTS audio chunk finished");
       isPlayingAudio = false;
-      // Keep video muted until session ends for better UX
+      // Original audio continues playing - no unmute needed
     } else {
       console.log("[Offscreen] More audio chunks pending");
     }
