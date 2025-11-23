@@ -1,47 +1,98 @@
 import os
+import asyncio
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineTask
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.fish.tts import FishAudioTTSService
-from pipecat.transports.websocket.server import WebsocketServerTransport, WebsocketServerParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.base_input import BaseInputTransport
+from pipecat.transports.base_output import BaseOutputTransport
+from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame, FrameDirection
+
+class FastAPIInputTransport(BaseInputTransport):
+    def __init__(self, websocket, params):
+        super().__init__(params)
+        self._websocket = websocket
+
+    async def start(self, frame_handler):
+        self._handler = frame_handler
+        try:
+            # Receive raw bytes from FastAPI websocket
+            while True:
+                message = await self._websocket.receive_bytes()
+                frame = InputAudioRawFrame(
+                    audio=message, 
+                    sample_rate=self._params.audio_in_sample_rate, 
+                    num_channels=1
+                )
+                await self._handler(frame)
+        except Exception as e:
+            print(f"WebSocket Input closed: {e}")
+            await self._handler(CancelFrame())
+
+    async def stop(self):
+        pass
+
+class FastAPIOutputTransport(BaseOutputTransport):
+    def __init__(self, websocket, params):
+        super().__init__(params)
+        self._websocket = websocket
+
+    async def start(self, frame_handler):
+        pass
+
+    async def process_frame(self, frame, direction):
+        if isinstance(frame, OutputAudioRawFrame):
+            try:
+                await self._websocket.send_bytes(frame.audio)
+            except Exception as e:
+                print(f"WebSocket Output Error: {e}")
+        elif isinstance(frame, (StartFrame, EndFrame)):
+            pass
+
+    async def stop(self):
+        pass
+
+class FastAPITransport(BaseTransport):
+    def __init__(self, websocket, params):
+        super().__init__(params)
+        self._input = FastAPIInputTransport(websocket, params)
+        self._output = FastAPIOutputTransport(websocket, params)
+
+    def input(self):
+        return self._input
+
+    def output(self):
+        return self._output
 
 async def run_translation_bot(websocket_client, reference_id, target_lang):
     """
     Run the translation pipeline with Deepgram STT -> OpenAI Translation -> Fish TTS
-    
-    Args:
-        websocket_client: WebSocket connection from the client
-        reference_id: Fish Audio voice ID to use for TTS
-        target_lang: Target language code (e.g., 'es', 'fr', 'de', 'ja')
     """
-    # Input: 16kHz (from Extension), Output: 24kHz (Fish Audio default)
-    transport = WebsocketServerTransport(
-        params=WebsocketServerParams(
+    # Custom Transport wrapping FastAPI WebSocket
+    transport = FastAPITransport(
+        websocket=websocket_client,
+        params=TransportParams(
             audio_in_sample_rate=16000,
             audio_out_sample_rate=24000,
-            add_wav_header=False
         )
     )
 
-    # Speech-to-Text: Deepgram
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
     
-    # Translation: OpenAI GPT-4o-mini
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
     
-    # Text-to-Speech: Fish Audio (using the provided reference_id)
     tts = FishAudioTTSService(
         api_key=os.getenv("FISH_API_KEY"),
         reference_id=reference_id,
         latency="balanced"
     )
 
-    # System prompt for translation
     messages = [
         {
             "role": "system",
@@ -51,7 +102,6 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     context = OpenAILLMContext(messages)
     context_aggregator = llm.create_context_aggregator(context)
 
-    # Build the pipeline
     pipeline = Pipeline([
         transport.input(),
         stt,
@@ -61,8 +111,6 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         transport.output(),
     ])
 
-    # Run the pipeline
     task = PipelineTask(pipeline)
-    await transport.setup(websocket_client)
+    # No setup needed for custom transport as we handle it in init
     await task.run()
-
