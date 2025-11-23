@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Mic, Square, Play } from "lucide-react";
+import { Mic, Square } from "lucide-react";
 
 import { AudioWaveform } from "./AudioWaveform";
 import { Button } from "./ui/button";
@@ -39,7 +39,6 @@ function emitRuntimeMessage(payload) {
 
 export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOverlay }) {
   const [status, setStatus] = useState("idle");
-  const [inputSource, setInputSource] = useState("microphone");
   const [targetLanguage, setTargetLanguage] = useState("english");
   const [audioMode, setAudioMode] = useState("translated");
   const [useVoiceClone, setUseVoiceClone] = useState(false);
@@ -55,7 +54,7 @@ export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOver
     setStatus("listening");
     setShowFloatingOverlay(true);
 
-    emitRuntimeMessage({ action: "START_SESSION", targetLang: targetLangCode, inputSource });
+    emitRuntimeMessage({ action: "START_SESSION", targetLang: targetLangCode });
 
     setTimeout(() => setStatus("processing"), 2000);
     setTimeout(() => setStatus("translating"), 4000);
@@ -94,34 +93,6 @@ export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOver
             <AudioWaveform isActive color={statusStyles.color} />
           </div>
         )}
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="input-source" className="text-[#1A1A1A]">
-          Select Input Source
-        </Label>
-        <Select value={inputSource} onValueChange={setInputSource}>
-          <SelectTrigger
-            id="input-source"
-            className="bg-[#F6F8FB] border-none rounded-xl h-12 shadow-sm"
-          >
-            <SelectValue placeholder="Choose source" />
-          </SelectTrigger>
-          <SelectContent className="rounded-xl">
-            <SelectItem value="microphone" className="rounded-lg">
-              <div className="flex items-center gap-2">
-                <Mic className="w-4 h-4" />
-                <span>Microphone</span>
-              </div>
-            </SelectItem>
-            <SelectItem value="this-tab" className="rounded-lg">
-              <div className="flex items-center gap-2">
-                <Play className="w-4 h-4" />
-                <span>This Tab</span>
-              </div>
-            </SelectItem>
-          </SelectContent>
-        </Select>
       </div>
 
       <div className="space-y-2">
