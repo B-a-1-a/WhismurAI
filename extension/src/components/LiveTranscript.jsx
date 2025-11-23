@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { Columns2, Copy, Download, FileText } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Copy, Download, FileText } from "lucide-react";
 
 import { TranscriptBubble } from "./TranscriptBubble";
 import { Button } from "./ui/button";
-import { ScrollArea } from "./ui/scroll-area";
 
 const MOCK_TRANSCRIPTS = [
   {
@@ -30,9 +29,7 @@ const MOCK_TRANSCRIPTS = [
 ];
 
 export function LiveTranscript({ isTranslating }) {
-  const [viewMode, setViewMode] = useState("dual");
   const [transcripts, setTranscripts] = useState([]);
-  const scrollRef = useRef(null);
 
   useEffect(() => {
     if (!isTranslating) {
@@ -56,12 +53,6 @@ export function LiveTranscript({ isTranslating }) {
 
     return () => timers.forEach((timer) => clearTimeout(timer));
   }, [isTranslating]);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [transcripts]);
 
   const serializeTranscript = () =>
     transcripts
@@ -94,30 +85,25 @@ export function LiveTranscript({ isTranslating }) {
   };
 
   return (
-    <div className="flex flex-col h-[420px]">
-      <div className="px-4 py-3 border-b border-gray-200 bg-[#F6F8FB]">
-        <div className="flex items-center justify-between">
-          <div className="flex gap-2">
-            <Button
-              variant={viewMode === "transcript" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setViewMode("transcript")}
-              className="rounded-lg h-8"
-            >
-              <FileText className="w-3 h-3 mr-1" />
-              Transcript Only
-            </Button>
-            <Button
-              variant={viewMode === "dual" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setViewMode("dual")}
-              className="rounded-lg h-8"
-            >
-              <Columns2 className="w-3 h-3 mr-1" />
-              Dual View
-            </Button>
-          </div>
-
+    <div className="flex flex-col" style={{ height: "420px", minHeight: "420px" }}>
+      <style>{`
+        .transcript-scroll-container::-webkit-scrollbar {
+          width: 6px;
+        }
+        .transcript-scroll-container::-webkit-scrollbar-track {
+          background: #F6F8FB;
+          border-radius: 10px;
+        }
+        .transcript-scroll-container::-webkit-scrollbar-thumb {
+          background: #4C6FFF;
+          border-radius: 10px;
+        }
+        .transcript-scroll-container::-webkit-scrollbar-thumb:hover {
+          background: #3D5FEE;
+        }
+      `}</style>
+      <div className="px-4 py-3 border-b border-gray-200 bg-[#F6F8FB] flex-shrink-0">
+        <div className="flex items-center justify-end">
           <div className="flex gap-2">
             <Button
               variant="ghost"
@@ -141,10 +127,13 @@ export function LiveTranscript({ isTranslating }) {
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div ref={scrollRef} className="p-4 space-y-3">
+      <div 
+        className="overflow-y-auto transcript-scroll-container flex-1 min-h-0"
+        style={{ maxHeight: "100%" }}
+      >
+        <div className="p-4 space-y-3">
           {transcripts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-[400px] text-center">
+            <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="w-16 h-16 bg-[#F6F8FB] rounded-full flex items-center justify-center mb-4">
                 <FileText className="w-8 h-8 text-[#9CA3AF]" />
               </div>
@@ -155,11 +144,11 @@ export function LiveTranscript({ isTranslating }) {
             </div>
           ) : (
             transcripts.map((entry) => (
-              <TranscriptBubble key={entry.id} transcript={entry} viewMode={viewMode} />
+              <TranscriptBubble key={entry.id} transcript={entry} viewMode="dual" />
             ))
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }

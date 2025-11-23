@@ -37,10 +37,9 @@ function emitRuntimeMessage(payload) {
   }
 }
 
-export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOverlay }) {
+export function PopupHome({ isTranslating, setIsTranslating }) {
   const [status, setStatus] = useState("idle");
   const [targetLanguage, setTargetLanguage] = useState("english");
-  const [audioMode, setAudioMode] = useState("translated");
   const [useVoiceClone, setUseVoiceClone] = useState(false);
 
   const statusStyles = STATUS_CONFIG[status];
@@ -52,8 +51,6 @@ export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOver
   const handleStartTranslation = () => {
     setIsTranslating(true);
     setStatus("listening");
-    setShowFloatingOverlay(true);
-
     emitRuntimeMessage({ action: "START_SESSION", targetLang: targetLangCode });
 
     setTimeout(() => setStatus("processing"), 2000);
@@ -63,7 +60,6 @@ export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOver
   const handleStopTranslation = () => {
     setIsTranslating(false);
     setStatus("idle");
-    setShowFloatingOverlay(false);
     emitRuntimeMessage({ action: "STOP_SESSION" });
   };
 
@@ -97,7 +93,7 @@ export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOver
 
       <div className="space-y-2">
         <Label htmlFor="target-language" className="text-[#1A1A1A]">
-          Target Language
+          Translate To
         </Label>
         <Select value={targetLanguage} onValueChange={setTargetLanguage}>
           <SelectTrigger
@@ -116,37 +112,7 @@ export function PopupHome({ isTranslating, setIsTranslating, setShowFloatingOver
         </Select>
       </div>
 
-      <div className="space-y-3 bg-[#F6F8FB] rounded-xl p-3.5">
-        <div className="space-y-2">
-          <Label className="text-[#3D3D3D]">Audio Playback</Label>
-          <div className="flex items-center bg-white rounded-lg p-1 shadow-sm">
-            <button
-              type="button"
-              onClick={() => setAudioMode("original")}
-              className={`flex-1 py-2 px-3 rounded-md transition-all duration-200 ${
-                audioMode === "original"
-                  ? "bg-[#4C6FFF] text-white shadow-md"
-                  : "text-[#9CA3AF] hover:text-[#3D3D3D]"
-              }`}
-              style={{ fontSize: "13px", fontWeight: 600 }}
-            >
-              Original
-            </button>
-            <button
-              type="button"
-              onClick={() => setAudioMode("translated")}
-              className={`flex-1 py-2 px-3 rounded-md transition-all duration-200 ${
-                audioMode === "translated"
-                  ? "bg-[#4C6FFF] text-white shadow-md"
-                  : "text-[#9CA3AF] hover:text-[#3D3D3D]"
-              }`}
-              style={{ fontSize: "13px", fontWeight: 600 }}
-            >
-              Translated
-            </button>
-          </div>
-        </div>
-
+      <div className="bg-[#F6F8FB] rounded-xl p-3.5">
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-1">
             <Label htmlFor="voice-clone" className="text-[#3D3D3D] cursor-pointer">

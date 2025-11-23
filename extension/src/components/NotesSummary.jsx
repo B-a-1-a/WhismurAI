@@ -2,7 +2,6 @@ import { useState } from "react";
 import { CheckCircle2, RefreshCw, Sparkles, StickyNote } from "lucide-react";
 
 import { Button } from "./ui/button";
-import { ScrollArea } from "./ui/scroll-area";
 import { Textarea } from "./ui/textarea";
 
 export function NotesSummary({ isTranslating }) {
@@ -29,8 +28,28 @@ export function NotesSummary({ isTranslating }) {
   };
 
   return (
-    <ScrollArea className="h-[420px]">
-      <div className="p-4 space-y-4">
+    <div className="flex flex-col" style={{ height: "420px", minHeight: "420px" }}>
+      <style>{`
+        .notes-scroll-container::-webkit-scrollbar {
+          width: 6px;
+        }
+        .notes-scroll-container::-webkit-scrollbar-track {
+          background: #F6F8FB;
+          border-radius: 10px;
+        }
+        .notes-scroll-container::-webkit-scrollbar-thumb {
+          background: #4C6FFF;
+          border-radius: 10px;
+        }
+        .notes-scroll-container::-webkit-scrollbar-thumb:hover {
+          background: #3D5FEE;
+        }
+      `}</style>
+      <div 
+        className="overflow-y-auto notes-scroll-container flex-1 min-h-0"
+        style={{ maxHeight: "100%" }}
+      >
+        <div className="p-4 space-y-4">
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -171,7 +190,8 @@ export function NotesSummary({ isTranslating }) {
           </p>
         </div>
       </div>
-    </ScrollArea>
+      </div>
+    </div>
   );
 }
 

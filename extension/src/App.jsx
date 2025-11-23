@@ -2,7 +2,6 @@ import { useState } from "react";
 import { FileText, Mic, StickyNote } from "lucide-react";
 
 import "./index.css";
-import { FloatingOverlay } from "./components/FloatingOverlay";
 import { LiveTranscript } from "./components/LiveTranscript";
 import { NotesSummary } from "./components/NotesSummary";
 import { PopupHome } from "./components/PopupHome";
@@ -11,10 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 function App() {
   const [activeTab, setActiveTab] = useState("home");
   const [isTranslating, setIsTranslating] = useState(false);
-  const [showFloatingOverlay, setShowFloatingOverlay] = useState(false);
 
   return (
-    <div className="min-h-screen bg-[#FAFAFA] relative">
+    <div className="h-full bg-[#FAFAFA] relative overflow-hidden">
       <style>{`
         :root {
           --whismur-primary: #4C6FFF;
@@ -23,24 +21,9 @@ function App() {
           --whismur-text-secondary: #3D3D3D;
           --whismur-bg-card: #F6F8FB;
         }
-
-        ::-webkit-scrollbar {
-          width: 6px;
-        }
-        ::-webkit-scrollbar-track {
-          background: #F6F8FB;
-          border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb {
-          background: #4C6FFF;
-          border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-          background: #3D5FEE;
-        }
       `}</style>
 
-      <div className="mx-auto py-4 px-2" style={{ maxWidth: "340px" }}>
+      <div className="mx-auto px-2 pt-4 pb-4" style={{ maxWidth: "340px" }}>
         <div className="bg-white rounded-xl shadow-lg overflow-hidden">
           <div className="bg-gradient-to-br from-[#4C6FFF] to-[#6B5AFE] px-5 py-3">
             <div className="flex items-center justify-between">
@@ -89,7 +72,6 @@ function App() {
               <PopupHome
                 isTranslating={isTranslating}
                 setIsTranslating={setIsTranslating}
-                setShowFloatingOverlay={setShowFloatingOverlay}
               />
             </TabsContent>
 
@@ -104,7 +86,6 @@ function App() {
         </div>
       </div>
 
-      {showFloatingOverlay && <FloatingOverlay onClose={() => setShowFloatingOverlay(false)} />}
     </div>
   );
 }
