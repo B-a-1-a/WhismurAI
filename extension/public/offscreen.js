@@ -6,6 +6,7 @@ let workletNode = null;
 let playbackContext = null;
 let activeStream = null;
 let nextStartTime = 0; // Track when the next chunk should play
+let firstAudioReceived = false; // Track if we've received first audio chunk
 
 // Transcript aggregation state
 let currentTranscript = { original: '', translation: '' };
@@ -78,32 +79,32 @@ async function startCapture(data) {
 
 function stopCapture() {
   console.log("[Offscreen] Stopping capture");
-  
+
   // Clear any pending transcript timeout
   if (transcriptTimeout) {
     clearTimeout(transcriptTimeout);
     transcriptTimeout = null;
   }
-  
+
   // Reset transcript accumulation
   currentTranscript = { original: '', translation: '' };
-  
+
   if (socket) {
     socket.close();
     socket = null;
   }
-  
+
   if (workletNode) {
     workletNode.disconnect();
     workletNode.port.close();
     workletNode = null;
   }
-  
+
   if (audioContext) {
     audioContext.close();
     audioContext = null;
   }
-  
+
   if (activeStream) {
     activeStream.getTracks().forEach(track => track.stop());
     activeStream = null;
@@ -113,9 +114,10 @@ function stopCapture() {
     playbackContext.close();
     playbackContext = null;
   }
-  
-  // Reset scheduler
+
+  // Reset scheduler and flags
   nextStartTime = 0;
+  firstAudioReceived = false;
 }
 
 async function connectSocket(stream, targetLang) {
@@ -136,14 +138,14 @@ async function connectSocket(stream, targetLang) {
         const data = JSON.parse(event.data);
         if (data.type === 'transcript') {
           console.log(`[Offscreen] Transcript chunk (${data.mode}):`, data.text);
-          
+
           // Accumulate streaming chunks
           if (data.mode === 'original') {
             currentTranscript.original += data.text;
           } else if (data.mode === 'translation') {
             currentTranscript.translation += data.text;
           }
-          
+
           // Debounce: wait for chunks to stop coming before saving
           clearTimeout(transcriptTimeout);
           transcriptTimeout = setTimeout(() => {
@@ -154,16 +156,16 @@ async function connectSocket(stream, targetLang) {
                 translation: currentTranscript.translation,
                 timestamp: Date.now()
               };
-              
+
               console.log('[Offscreen] Saving transcript pair:', transcriptPair);
               appendTranscript(transcriptPair);
-              
+
               // Broadcast to popup
               chrome.runtime.sendMessage({
                 type: 'TRANSCRIPT_UPDATE',
                 data: transcriptPair
               }).catch(err => console.log('[Offscreen] Failed to broadcast:', err));
-              
+
               // Reset for next transcript
               currentTranscript = { original: '', translation: '' };
             }
@@ -173,9 +175,13 @@ async function connectSocket(stream, targetLang) {
         console.error("[Offscreen] Failed to parse JSON:", e);
       }
     } else {
-      // console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
-      // Audio playback disabled for debugging
-      // playPcmChunk(event.data);
+      // Received PCM audio from Fish Audio TTS
+      if (!firstAudioReceived) {
+        firstAudioReceived = true;
+        console.log("[Offscreen] 🎵 First audio chunk received! Voice cloning complete, starting playback...");
+      }
+      console.log("[Offscreen] Received audio chunk, size:", event.data.byteLength);
+      playPcmChunk(event.data);
     }
   };
 
@@ -233,14 +239,17 @@ async function setupAudioProcessing(stream, ws) {
       }
     };
     
-    // Connect: MediaStreamSource -> WorkletNode -> Destination
+    // Connect: MediaStreamSource -> WorkletNode (NO destination connection)
+    // We DON'T connect to audioContext.destination to prevent original audio playback
+    // Only the translated audio from Fish Audio TTS will be played
     console.log("[Offscreen] Creating MediaStreamSource...");
     const source = audioContext.createMediaStreamSource(stream);
     console.log("[Offscreen] Connecting audio nodes...");
     source.connect(workletNode);
-    workletNode.connect(audioContext.destination);
-    
-    console.log("[Offscreen] Audio processing pipeline established");
+    // NOTE: Intentionally NOT connecting workletNode to destination
+    // This mutes the original audio - only translated audio will play
+
+    console.log("[Offscreen] Audio processing pipeline established (original audio muted)");
     
   } catch (err) {
     console.error("[Offscreen] Failed to setup AudioWorklet:", err);
@@ -254,15 +263,19 @@ async function setupAudioProcessing(stream, ws) {
 function playPcmChunk(data) {
   try {
     if (!playbackContext) {
-      // Fish Audio outputs 24kHz
+      // Fish Audio outputs 24kHz PCM
       playbackContext = new AudioContext({ sampleRate: 24000 });
-      nextStartTime = playbackContext.currentTime;
+      nextStartTime = 0;
+      console.log("[Offscreen] Created playback context at 24kHz");
     }
-    
+
+    // Resume context if suspended (autoplay policy)
     if (playbackContext.state === 'suspended') {
-      playbackContext.resume();
+      playbackContext.resume().then(() => {
+        console.log("[Offscreen] Playback context resumed");
+      });
     }
-    
+
     if (data instanceof Blob) {
       data.arrayBuffer().then(buffer => processPcmData(buffer));
     } else if (data instanceof ArrayBuffer) {
@@ -274,32 +287,42 @@ function playPcmChunk(data) {
 }
 
 function processPcmData(buffer) {
+  // Convert Int16 PCM to Float32 for Web Audio API
   const int16Array = new Int16Array(buffer);
   const float32Array = new Float32Array(int16Array.length);
-  
+
   for (let i = 0; i < int16Array.length; i++) {
+    // Normalize Int16 to Float32 range [-1.0, 1.0]
     float32Array[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
   }
-  
-  const audioBuffer = playbackContext.createBuffer(1, float32Array.length, playbackContext.sampleRate);
+
+  // Create audio buffer at 24kHz (Fish Audio output rate)
+  const audioBuffer = playbackContext.createBuffer(
+    1,  // mono channel
+    float32Array.length,
+    24000  // Fish Audio sample rate
+  );
   audioBuffer.getChannelData(0).set(float32Array);
-  
+
+  // Create source and connect to destination
   const source = playbackContext.createBufferSource();
   source.buffer = audioBuffer;
   source.connect(playbackContext.destination);
-  
-  // Schedule playback to avoid overlap and gaps
+
+  // Schedule playback to avoid gaps and overlaps
   const currentTime = playbackContext.currentTime;
-  
-  // If nextStartTime is in the past (we fell behind or just started), reset to now
-  // Adding a small buffer (0.05s) allows for smoother startup
+
+  // Initialize or reset scheduler if we fell behind
   if (nextStartTime < currentTime) {
-    nextStartTime = currentTime + 0.05;
+    nextStartTime = currentTime + 0.05;  // 50ms buffer for smooth startup
   }
-  
+
   source.start(nextStartTime);
-  
-  // Advance the schedule pointer
-  nextStartTime += audioBuffer.duration;
+
+  // Advance scheduler by the duration of this chunk
+  const duration = audioBuffer.duration;
+  nextStartTime += duration;
+
+  console.log(`[Offscreen] Playing audio: ${(duration * 1000).toFixed(0)}ms, scheduled at ${nextStartTime.toFixed(2)}s`);
 }
 

@@ -131,6 +131,9 @@ function App() {
           <p className="text-lg text-green-400 font-mono mt-1">
             Translating to {targetLang.toUpperCase()}
           </p>
+          <p className="text-xs text-gray-500 mt-2">
+            Note: Initial 5-10 second delay for voice cloning. Original audio is muted.
+          </p>
         </div>
       )}
 

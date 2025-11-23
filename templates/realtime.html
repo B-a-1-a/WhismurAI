@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Real-time Streaming Translation</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        overflow: hidden;
+      }
+
+      header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 40px 20px;
+        text-align: center;
+      }
+
+      header h1 {
+        font-size: 2.5em;
+        margin-bottom: 10px;
+      }
+
+      header .badge {
+        display: inline-block;
+        background: rgba(255, 255, 255, 0.2);
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 0.9em;
+        margin-top: 10px;
+      }
+
+      main {
+        padding: 40px;
+      }
+
+      .section {
+        margin-bottom: 30px;
+      }
+
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 10px;
+        color: #333;
+        font-size: 1.1em;
+      }
+
+      select {
+        width: 100%;
+        padding: 12px;
+        border: 2px solid #ddd;
+        border-radius: 10px;
+        font-size: 1em;
+        background: white;
+        cursor: pointer;
+        transition: border-color 0.3s;
+      }
+
+      select:hover {
+        border-color: #667eea;
+      }
+
+      /* Toggle Section */
+      .toggle-section {
+        text-align: center;
+        padding: 30px 0;
+        background: #f8f9fa;
+        border-radius: 15px;
+      }
+
+      .toggle-container {
+        display: inline-flex;
+        align-items: center;
+        gap: 20px;
+        background: white;
+        padding: 20px 40px;
+        border-radius: 50px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+      }
+
+      .toggle-label {
+        font-size: 1.3em;
+        font-weight: 700;
+        color: #666;
+        min-width: 110px;
+        text-align: center;
+        transition: all 0.3s;
+      }
+
+      .toggle-label.active {
+        color: #667eea;
+        transform: scale(1.1);
+      }
+
+      /* Switch */
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 90px;
+        height: 45px;
+      }
+
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.4s;
+        border-radius: 45px;
+      }
+
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 37px;
+        width: 37px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        transition: 0.4s;
+        border-radius: 50%;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+      }
+
+      input:checked + .slider {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+
+      input:checked + .slider:before {
+        transform: translateX(45px);
+      }
+
+      input:disabled + .slider {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Status Display */
+      .status-display {
+        text-align: center;
+        padding: 20px;
+        min-height: 100px;
+      }
+
+      .status-text {
+        font-size: 1.2em;
+        color: #666;
+        margin: 10px 0;
+      }
+
+      .status-text.active {
+        color: #667eea;
+        font-weight: 700;
+      }
+
+      /* Progress Bar */
+      .progress-container {
+        margin: 20px 0;
+        display: none;
+      }
+
+      .progress-container.active {
+        display: block;
+      }
+
+      .progress-bar {
+        width: 100%;
+        height: 8px;
+        background: #e0e0e0;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        width: 0%;
+        transition: width 0.3s;
+        animation: pulse 1.5s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
+      }
+
+      .progress-text {
+        text-align: center;
+        margin-top: 10px;
+        color: #667eea;
+        font-weight: 600;
+      }
+
+      /* Audio Visualization */
+      .audio-viz {
+        display: none;
+        justify-content: center;
+        align-items: center;
+        gap: 4px;
+        height: 60px;
+        margin: 20px 0;
+      }
+
+      .audio-viz.playing {
+        display: flex;
+      }
+
+      .audio-bar {
+        width: 4px;
+        height: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 2px;
+        animation: audioWave 0.8s ease-in-out infinite;
+      }
+
+      .audio-bar:nth-child(2) {
+        animation-delay: 0.1s;
+      }
+      .audio-bar:nth-child(3) {
+        animation-delay: 0.2s;
+      }
+      .audio-bar:nth-child(4) {
+        animation-delay: 0.3s;
+      }
+      .audio-bar:nth-child(5) {
+        animation-delay: 0.4s;
+      }
+      .audio-bar:nth-child(6) {
+        animation-delay: 0.3s;
+      }
+      .audio-bar:nth-child(7) {
+        animation-delay: 0.2s;
+      }
+      .audio-bar:nth-child(8) {
+        animation-delay: 0.1s;
+      }
+
+      @keyframes audioWave {
+        0%,
+        100% {
+          height: 20px;
+        }
+        50% {
+          height: 50px;
+        }
+      }
+
+      /* Info Panel */
+      .info-panel {
+        background: #f8f9fa;
+        padding: 25px;
+        border-radius: 15px;
+        margin-top: 30px;
+      }
+
+      .info-panel h3 {
+        color: #667eea;
+        margin-bottom: 15px;
+      }
+
+      .info-panel .feature {
+        display: flex;
+        align-items: center;
+        margin: 12px 0;
+        color: #666;
+      }
+
+      .info-panel .feature::before {
+        content: "⚡";
+        margin-right: 10px;
+        font-size: 1.2em;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      footer {
+        background: #f8f9fa;
+        padding: 20px;
+        text-align: center;
+        color: #666;
+        border-top: 1px solid #ddd;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>🎙️ Real-time Streaming Translation</h1>
+        <p>Instant audio streaming with zero delay</p>
+        <div class="badge">⚡ LIVE STREAMING ENABLED</div>
+      </header>
+
+      <main>
+        <!-- Audio Selection -->
+        <div class="section">
+          <label for="audio-select">Select Audio File:</label>
+          <select id="audio-select">
+            <option value="">-- Select an audio file --</option>
+            {% for file in audio_files %}
+            <option value="{{ file }}">{{ file }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Language Selection -->
+        <div class="section">
+          <label for="language-select">Target Language:</label>
+          <select id="language-select">
+            <option value="Spanish" selected>Spanish</option>
+            <option value="French">French</option>
+            <option value="German">German</option>
+            <option value="Italian">Italian</option>
+            <option value="Portuguese">Portuguese</option>
+            <option value="Chinese">Chinese</option>
+            <option value="Japanese">Japanese</option>
+            <option value="Korean">Korean</option>
+            <option value="Hindi">Hindi</option>
+          </select>
+        </div>
+
+        <!-- Toggle Section -->
+        <div class="section toggle-section">
+          <div class="toggle-container">
+            <span class="toggle-label active" id="original-label"
+              >Original</span
+            >
+            <label class="switch">
+              <input type="checkbox" id="translation-toggle" disabled />
+              <span class="slider"></span>
+            </label>
+            <span class="toggle-label" id="translated-label">Translated</span>
+          </div>
+        </div>
+
+        <!-- Status Display -->
+        <div class="status-display">
+          <p class="status-text" id="status-text">
+            Select an audio file to begin
+          </p>
+
+          <!-- Progress Bar -->
+          <div class="progress-container" id="progress-container">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <p class="progress-text" id="progress-text"></p>
+          </div>
+
+          <!-- Audio Visualization -->
+          <div class="audio-viz" id="audio-viz">
+            <div class="audio-bar"></div>
+            <div class="audio-bar"></div>
+            <div class="audio-bar"></div>
+            <div class="audio-bar"></div>
+            <div class="audio-bar"></div>
+            <div class="audio-bar"></div>
+            <div class="audio-bar"></div>
+            <div class="audio-bar"></div>
+          </div>
+        </div>
+
+        <!-- Hidden Audio Players -->
+        <audio id="original-audio" style="display: none"></audio>
+        <audio id="translated-audio" style="display: none"></audio>
+
+        <!-- Info Panel -->
+        <div class="info-panel">
+          <h3>⚡ Real-time Streaming Features</h3>
+          <div class="feature">Audio streams as it's being generated</div>
+          <div class="feature">Zero waiting - playback starts immediately</div>
+          <div class="feature">Your cloned voice for translations</div>
+          <div class="feature">
+            Smooth toggle between original and translated
+          </div>
+        </div>
+      </main>
+
+      <footer>
+        <p>Powered by OpenAI Whisper, GPT-5 nano, Fish Audio & WebSockets</p>
+      </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/streaming.js') }}"></script>
+  </body>
+</html>

@@ -10,7 +10,22 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame, TextFrame, TranscriptionFrame, LLMTextFrame, TTSTextFrame, TranslationFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame
+from pipecat.frames.frames import (
+    InputAudioRawFrame,
+    OutputAudioRawFrame,
+    TTSAudioRawFrame,
+    StartFrame,
+    EndFrame,
+    CancelFrame,
+    TextFrame,
+    TranscriptionFrame,
+    LLMTextFrame,
+    TTSTextFrame,
+    TranslationFrame,
+    LLMFullResponseStartFrame,
+    LLMFullResponseEndFrame,
+    InterruptionFrame
+)
 
 class TranscriptProcessor(FrameProcessor):
     def __init__(self, websocket):
@@ -84,29 +99,44 @@ class FastAPIInputTransport(BaseInputTransport):
         await super().stop(frame)
 
 class FastAPIOutputTransport(BaseOutputTransport):
-    def __init__(self, websocket, params):
-        super().__init__(params)
+    def __init__(self, websocket, params, **kwargs):
+        super().__init__(params, **kwargs)
         self._websocket = websocket
+        self._audio_frame_count = 0
 
-    async def process_frame(self, frame, direction):
-        # Filter out frames that we don't need to handle to avoid "not registered" warnings
-        if isinstance(frame, (TextFrame, LLMTextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame)):
-            return
+    async def start(self, frame: StartFrame):
+        """Initialize the output transport and register audio handlers"""
+        await super().start(frame)
+        # This registers the transport to handle audio frames
+        await self.set_transport_ready(frame)
+        print("[FastAPIOutput] Transport ready and registered for audio output")
 
-        await super().process_frame(frame, direction)
-        
-        # Send audio frames to WebSocket
-        if isinstance(frame, OutputAudioRawFrame):
-            try:
-                await self._websocket.send_bytes(frame.audio)
-            except Exception as e:
-                print(f"WebSocket Output Error: {e}")
+    async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
+        """Stream audio frames directly to WebSocket as they arrive
+
+        Handles both OutputAudioRawFrame and TTSAudioRawFrame (which is a subclass).
+        Fish Audio TTS outputs TTSAudioRawFrame objects.
+        """
+        try:
+            self._audio_frame_count += 1
+
+            # Log frame type for debugging
+            frame_type = "TTS" if isinstance(frame, TTSAudioRawFrame) else "Output"
+            if self._audio_frame_count % 10 == 0:  # Log every 10th frame
+                print(f"[FastAPIOutput] Streaming {frame_type} audio frame #{self._audio_frame_count}: {len(frame.audio)} bytes")
+
+            # Send raw PCM audio bytes to WebSocket client
+            await self._websocket.send_bytes(frame.audio)
+            return True
+        except Exception as e:
+            print(f"[FastAPIOutput] WebSocket error: {e}")
+            return False
 
 class FastAPITransport(BaseTransport):
-    def __init__(self, websocket, params):
-        super().__init__()
+    def __init__(self, websocket, params, **kwargs):
+        super().__init__(**kwargs)
         self._input = FastAPIInputTransport(websocket, params)
-        self._output = FastAPIOutputTransport(websocket, params)
+        self._output = FastAPIOutputTransport(websocket, params, **kwargs)
 
     def input(self):
         return self._input
@@ -133,6 +163,7 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         params=TransportParams(
             audio_in_sample_rate=16000,  # Deepgram streaming default
             audio_out_sample_rate=24000,  # Fish Audio output
+            audio_out_enabled=True,  # CRITICAL: Enable audio output streaming
         )
     )
 
@@ -149,15 +180,15 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         api_key=os.getenv("OPENAI_API_KEY"),
         model="gpt-4o-mini"
     )
-    
-    # Fish Audio TTS Service
-    # reference_id: Persistent voice model ID created via client.voices.create()
-    # or use on-the-fly cloning with ReferenceAudio objects
-    # tts = FishAudioTTSService(
-    #     api_key=os.getenv("FISH_API_KEY"),
-    #     reference_id=reference_id,  # Voice model ID from Fish Audio console
-    #     latency="balanced"
-    # )
+
+    # Fish Audio TTS Service with optimized settings for low latency
+    # Using reference_id for voice cloning and explicit PCM output format
+    tts = FishAudioTTSService(
+        api_key=os.getenv("FISH_API_KEY"),
+        reference_id=reference_id,  # Voice model ID for cloning
+        output_format="pcm",  # Explicit PCM format for lowest latency
+        sample_rate=24000,  # Match output transport sample rate
+    )
 
     messages = [
         {
@@ -178,7 +209,7 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         context_aggregator.user(),
         llm,
         transcript_sender_translated,
-        # tts,
+        tts,
         transport.output(),
     ])
 

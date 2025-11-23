@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Real-time Audio Translation</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>🎙️ Real-time Audio Translation</h1>
+        <p>Play original audio or toggle for instant translation</p>
+      </header>
+
+      <main>
+        <!-- Audio File Selection -->
+        <section class="audio-selector">
+          <label for="audio-select">Select Audio File:</label>
+          <select id="audio-select">
+            <option value="">-- Select an audio file --</option>
+            {% for file in audio_files %}
+            <option value="{{ file }}">{{ file }}</option>
+            {% endfor %}
+          </select>
+        </section>
+
+        <!-- Language Selection -->
+        <section class="language-selector">
+          <label for="language-select">Target Language:</label>
+          <select id="language-select">
+            <option value="Spanish" selected>Spanish</option>
+            <option value="French">French</option>
+            <option value="German">German</option>
+            <option value="Italian">Italian</option>
+            <option value="Portuguese">Portuguese</option>
+            <option value="Chinese">Chinese</option>
+            <option value="Japanese">Japanese</option>
+            <option value="Korean">Korean</option>
+            <option value="Arabic">Arabic</option>
+            <option value="Hindi">Hindi</option>
+            <option value="Russian">Russian</option>
+            <option value="Turkish">Turkish</option>
+            <option value="Dutch">Dutch</option>
+          </select>
+        </section>
+
+        <!-- Toggle Switch -->
+        <section class="toggle-section">
+          <div class="toggle-container">
+            <span class="toggle-label" id="original-label">Original</span>
+            <label class="switch">
+              <input type="checkbox" id="translation-toggle" />
+              <span class="slider"></span>
+            </label>
+            <span class="toggle-label" id="translated-label">Translated</span>
+          </div>
+        </section>
+
+        <!-- Audio Player -->
+        <section class="audio-player-section">
+          <div id="audio-info">
+            <p class="current-mode">
+              Current: <span id="mode-text">Original</span>
+            </p>
+            <p class="current-language">
+              Language: <span id="language-text">English</span>
+            </p>
+          </div>
+
+          <audio id="audio-player" controls>
+            <source id="audio-source" src="" type="audio/mpeg" />
+            Your browser does not support the audio element.
+          </audio>
+
+          <div id="status-message" class="status hidden"></div>
+          <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>Processing translation...</p>
+          </div>
+        </section>
+
+        <!-- Controls -->
+        <section class="controls">
+          <button id="play-btn" class="btn btn-primary" disabled>
+            ▶️ Play
+          </button>
+          <button id="pause-btn" class="btn btn-secondary" disabled>
+            ⏸️ Pause
+          </button>
+          <button id="stop-btn" class="btn btn-secondary" disabled>
+            ⏹️ Stop
+          </button>
+        </section>
+
+        <!-- Info Panel -->
+        <section class="info-panel">
+          <h3>How It Works</h3>
+          <ol>
+            <li>Select an audio file from your voice samples</li>
+            <li>Choose your target language (default: Spanish)</li>
+            <li>Toggle between Original and Translated audio</li>
+            <li>
+              Audio is transcribed, translated, and synthesized in real-time
+            </li>
+            <li>Your cloned voice is used for the translated output</li>
+          </ol>
+        </section>
+      </main>
+
+      <footer>
+        <p>Powered by OpenAI Whisper, GPT-5 nano, and Fish Audio</p>
+      </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>
