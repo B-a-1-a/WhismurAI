@@ -7,7 +7,10 @@ from pipecat.services.fish import FishTTSService
 from pipecat.transports.network.websocket_server import WebSocketServerTransport, WebSocketServerParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
-async def run_translation_bot(websocket_client, reference_id, target_lang):
+# Fixed generic voice ID for this phase
+DEFAULT_VOICE_ID = "7f92f8afb8ec43bf81429cc1c9199cb1"
+
+async def run_translation_bot(websocket_client, target_lang):
     # Input: 16kHz (from Extension), Output: 24kHz (Fish Audio default)
     transport = WebSocketServerTransport(
         params=WebSocketServerParams(
@@ -24,10 +27,10 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         model="gpt-4o-mini"
     )
     
-    # Fish TTS: Uses the ID passed
+    # Fish TTS: Uses the fixed Generic Voice ID
     tts = FishTTSService(
         api_key=os.getenv("FISH_API_KEY"),
-        reference_id=reference_id,
+        reference_id=DEFAULT_VOICE_ID,
         latency="balanced"
     )
 
@@ -52,4 +55,3 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     task = PipelineTask(pipeline)
     await transport.setup(websocket_client)
     await task.run()
-

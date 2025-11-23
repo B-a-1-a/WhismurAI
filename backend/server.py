@@ -14,14 +14,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Default Generic Voice ID
-DEFAULT_VOICE_ID = "7f92f8afb8ec43bf81429cc1c9199cb1" 
-
 @app.websocket("/ws/translate/{target_lang}")
 async def websocket_endpoint(websocket: WebSocket, target_lang: str):
     await websocket.accept()
-    # We always use DEFAULT_VOICE_ID for now as cloning is disabled
-    ref_id = DEFAULT_VOICE_ID
-    print(f"Starting pipeline. Voice: {ref_id} for Lang: {target_lang}")
-    await run_translation_bot(websocket, ref_id, target_lang)
-
+    print(f"Starting pipeline for target language: {target_lang}")
+    await run_translation_bot(websocket, target_lang)
