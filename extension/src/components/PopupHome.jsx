@@ -1,0 +1,214 @@
+import { useMemo, useState } from "react";
+import { Mic, Square } from "lucide-react";
+
+import { Button } from "./ui/button";
+import { Label } from "./ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import { Switch } from "./ui/switch";
+
+const LANGUAGE_OPTIONS = [
+  { value: "english", label: "English", code: "en" },
+  { value: "spanish", label: "Spanish", code: "es" },
+  { value: "japanese", label: "Japanese", code: "ja" },
+  { value: "korean", label: "Korean", code: "ko" },
+  { value: "chinese", label: "Chinese", code: "zh" },
+  { value: "french", label: "French", code: "fr" },
+  { value: "german", label: "German", code: "de" },
+  { value: "arabic", label: "Arabic", code: "ar" },
+];
+
+const STATUS_CONFIG = {
+  idle: { color: "#9CA3AF", text: "Waiting for audio..." },
+  listening: { color: "#00C4A7", text: "Listening..." },
+  processing: { color: "#F59E0B", text: "Processing..." },
+  translating: { color: "#4C6FFF", text: "Translating..." },
+};
+
+function emitRuntimeMessage(payload) {
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    chrome.runtime.sendMessage(payload);
+  }
+}
+
+export function PopupHome({ isTranslating, setIsTranslating, transcripts, setTranscripts, setShowFloatingOverlay }) {
+  const [status, setStatus] = useState("idle");
+  const [targetLanguage, setTargetLanguage] = useState("english");
+  const [useVoiceClone, setUseVoiceClone] = useState(false);
+
+  const statusStyles = STATUS_CONFIG[status];
+  const targetLangCode = useMemo(() => {
+    const match = LANGUAGE_OPTIONS.find((lang) => lang.value === targetLanguage);
+    return match ? match.code : targetLanguage;
+  }, [targetLanguage]);
+
+  const handleStartTranslation = () => {
+    setIsTranslating(true);
+    setStatus("listening");
+    if (setShowFloatingOverlay) {
+      setShowFloatingOverlay(true);
+    }
+
+    emitRuntimeMessage({ action: "START_SESSION", targetLang: targetLangCode });
+
+    setTimeout(() => setStatus("processing"), 2000);
+    setTimeout(() => setStatus("translating"), 4000);
+  };
+
+  const clearTranscripts = () => {
+    if (setTranscripts) {
+      setTranscripts([]);
+    }
+    if (chrome.storage) {
+      chrome.storage.local.remove(["cachedTranscripts", "transcriptCounter", "lastSummary", "summaryTimestamp"]);
+    }
+  };
+
+  const handleStopTranslation = async () => {
+    setIsTranslating(false);
+    setStatus("idle");
+    if (setShowFloatingOverlay) {
+      setShowFloatingOverlay(false);
+    }
+    emitRuntimeMessage({ action: "STOP_SESSION" });
+    
+    // Generate summary from transcripts
+    if (transcripts && transcripts.length > 0) {
+      try {
+        const transcriptTexts = transcripts.map(t => t.text || t.original || t).filter(t => t && t.trim());
+        if (transcriptTexts.length > 0) {
+          const response = await fetch("http://localhost:8000/api/summarize", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ transcripts: transcriptTexts }),
+          });
+          
+          if (response.ok) {
+            const summary = await response.json();
+            // Store summary in chrome.storage for NotesSummary to access (with cache)
+            if (chrome.storage) {
+              chrome.storage.local.set({ 
+                lastSummary: summary,
+                summaryTimestamp: Date.now() // Add timestamp for cache validation
+              });
+            }
+            // Emit custom event to switch tabs
+            window.dispatchEvent(new CustomEvent("showNotesTab"));
+          }
+        }
+      } catch (error) {
+        console.error("Failed to generate summary:", error);
+      }
+    }
+  };
+
+  return (
+    <div className="p-5 space-y-5">
+      <div className="bg-[#F6F8FB] rounded-xl p-3.5 space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <div
+              className="w-3 h-3 rounded-full transition-all duration-300"
+              style={{ backgroundColor: statusStyles.color }}
+            />
+            {status !== "idle" && (
+              <div
+                className="absolute inset-0 w-3 h-3 rounded-full animate-ping"
+                style={{ backgroundColor: statusStyles.color, opacity: 0.6 }}
+              />
+            )}
+          </div>
+          <span className="text-[#3D3D3D]" style={{ fontSize: "14px" }}>
+            {statusStyles.text}
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="target-language" className="text-[#1A1A1A]">
+          Translate to
+        </Label>
+        <Select value={targetLanguage} onValueChange={setTargetLanguage}>
+          <SelectTrigger
+            id="target-language"
+            className="bg-[#F6F8FB] border-none rounded-xl h-12 shadow-sm"
+          >
+            <SelectValue placeholder="Select language" />
+          </SelectTrigger>
+          <SelectContent className="rounded-xl max-h-[250px]">
+            {LANGUAGE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value} className="rounded-lg">
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-3 bg-[#F6F8FB] rounded-xl p-3.5">
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="voice-clone" className="text-[#3D3D3D] cursor-pointer">
+              Use Original Speaker Voice
+            </Label>
+            <span className="text-[#9CA3AF]" style={{ fontSize: "12px" }}>
+              AI Voice Cloning (Fish AI)
+            </span>
+          </div>
+          <Switch
+            id="voice-clone"
+            checked={useVoiceClone}
+            onCheckedChange={setUseVoiceClone}
+            className="data-[state=checked]:bg-[#00C4A7]"
+          />
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        {!isTranslating ? (
+          <Button
+            onClick={handleStartTranslation}
+            className="flex-1 h-12 rounded-xl bg-gradient-to-r from-[#4C6FFF] to-[#6B5AFE] hover:from-[#3D5FEE] hover:to-[#5C4BED] shadow-lg shadow-[#4C6FFF]/30 transition-all duration-300"
+          >
+            <Mic className="w-4 h-4 mr-2" />
+            Start Translation
+          </Button>
+        ) : (
+          <Button
+            onClick={handleStopTranslation}
+            variant="destructive"
+            className="flex-1 h-12 rounded-xl shadow-lg"
+          >
+            <Square className="w-4 h-4 mr-2" />
+            Stop
+          </Button>
+        )}
+      </div>
+
+      <div className="text-center text-[#9CA3AF]" style={{ fontSize: "12px" }}>
+        {isTranslating
+          ? "Translation is active. Check the Transcript tab for live results."
+          : "Select your preferences above and click Start Translation to begin."}
+      </div>
+      
+      {!isTranslating && transcripts && transcripts.length > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={clearTranscripts}
+          className="w-full rounded-xl text-xs"
+        >
+          Clear Transcripts & Summary
+        </Button>
+      )}
+    </div>
+  );
+}
+
