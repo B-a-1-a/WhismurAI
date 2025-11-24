@@ -5,60 +5,88 @@ from pipecat.pipeline.task import PipelineTask, PipelineParams, PipelineTaskPara
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.fish.tts import FishAudioTTSService
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext, OpenAILLMContextFrame
+from pipecat.processors.aggregators.openai_llm_context import (
+    OpenAILLMContext,
+    OpenAILLMContextFrame,
+)
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, CancelFrame, TextFrame, TranscriptionFrame, LLMTextFrame, TTSTextFrame, TranslationFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame, TTSAudioRawFrame, TTSStartedFrame, TTSStoppedFrame
+from pipecat.frames.frames import (
+    InputAudioRawFrame,
+    OutputAudioRawFrame,
+    StartFrame,
+    EndFrame,
+    CancelFrame,
+    TextFrame,
+    TranscriptionFrame,
+    LLMTextFrame,
+    TTSTextFrame,
+    TranslationFrame,
+    LLMFullResponseStartFrame,
+    LLMFullResponseEndFrame,
+    InterruptionFrame,
+    TTSAudioRawFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
+)
+
 
 class SentenceAggregator(FrameProcessor):
     """
     Accumulates transcript chunks into complete sentences before passing them downstream.
     Also handles sending 'original' transcript updates to the WebSocket.
     """
+
     def __init__(self, websocket):
         super().__init__()
         self.websocket = websocket
         self.sentence_buffer = ""
-        
+
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
-        
+
         if isinstance(frame, TranscriptionFrame):
-            is_final = getattr(frame, 'speech_final', False)
+            is_final = getattr(frame, "speech_final", False)
             text = frame.text.strip()
-            
-            print(f"[SentenceAggregator] Received TranscriptionFrame: text='{text[:50]}...', is_final={is_final}")
-            
+
+            print(
+                f"[SentenceAggregator] Received TranscriptionFrame: text='{text[:50]}...', is_final={is_final}"
+            )
+
             if not text:
                 return
 
             # Strategy: Accumulate text and check for natural sentence boundaries
             # Deepgram's interim results often contain complete phrases/sentences
-            
+
             # Check if this looks like a sentence ending (has punctuation)
-            has_punctuation = text.rstrip().endswith(('.', '!', '?', '。', '！', '？'))
-            
+            has_punctuation = text.rstrip().endswith((".", "!", "?", "。", "！", "？"))
+
             # For interim results, we accumulate and look for sentence boundaries
             if not is_final:
                 # Update buffer with latest interim text (replace, don't append)
                 # Deepgram sends progressively longer interim results
                 self.sentence_buffer = text
-                
+
                 # If we detect a sentence ending in interim AND have meaningful content, treat it as complete
                 # Require at least 10 characters to avoid sending fragments
                 if has_punctuation and len(self.sentence_buffer.strip()) > 10:
-                    print(f"[SentenceAggregator] Detected sentence end in interim: {self.sentence_buffer[:80]}")
-                    
+                    print(
+                        f"[SentenceAggregator] Detected sentence end in interim: {self.sentence_buffer[:80]}"
+                    )
+
                     # Send FINAL to UI
                     try:
-                        await self.websocket.send_json({
-                            "type": "transcript",
-                            "mode": "original", 
-                            "text": self.sentence_buffer,
-                            "is_final": True
-                        })
+                        await self.websocket.send_json(
+                            {
+                                "type": "transcript",
+                                "mode": "original",
+                                "text": self.sentence_buffer,
+                                "is_final": True,
+                            }
+                        )
                     except Exception as e:
                         print(f"[SentenceAggregator] WS Error: {e}")
 
@@ -66,60 +94,66 @@ class SentenceAggregator(FrameProcessor):
                     new_frame = TranscriptionFrame(
                         text=self.sentence_buffer,
                         user_id=frame.user_id,
-                        timestamp=frame.timestamp
+                        timestamp=frame.timestamp,
                     )
                     await self.push_frame(new_frame, direction)
-                    
+
                     # Clear buffer
                     self.sentence_buffer = ""
                 else:
                     # Still building - send interim update but don't translate yet
-                    print(f"[SentenceAggregator] Buffering interim: {self.sentence_buffer[:50]}...")
+                    print(
+                        f"[SentenceAggregator] Buffering interim: {self.sentence_buffer[:50]}..."
+                    )
                     try:
-                        await self.websocket.send_json({
-                            "type": "transcript",
-                            "mode": "original", 
-                            "text": self.sentence_buffer,
-                            "is_final": False
-                        })
+                        await self.websocket.send_json(
+                            {
+                                "type": "transcript",
+                                "mode": "original",
+                                "text": self.sentence_buffer,
+                                "is_final": False,
+                            }
+                        )
                     except Exception as e:
                         print(f"[SentenceAggregator] WS Error: {e}")
             else:
                 # speech_final=True - Deepgram detected end of speech
                 # This is the final version, send it
                 print(f"[SentenceAggregator] Speech final received: {text[:80]}")
-                
+
                 # Send FINAL to UI
                 try:
-                    await self.websocket.send_json({
-                        "type": "transcript",
-                        "mode": "original", 
-                        "text": text,
-                        "is_final": True
-                    })
+                    await self.websocket.send_json(
+                        {
+                            "type": "transcript",
+                            "mode": "original",
+                            "text": text,
+                            "is_final": True,
+                        }
+                    )
                 except Exception as e:
                     print(f"[SentenceAggregator] WS Error: {e}")
 
                 # Send to LLM
                 new_frame = TranscriptionFrame(
-                    text=text,
-                    user_id=frame.user_id,
-                    timestamp=frame.timestamp
+                    text=text, user_id=frame.user_id, timestamp=frame.timestamp
                 )
                 await self.push_frame(new_frame, direction)
-                
+
                 # Clear buffer
                 self.sentence_buffer = ""
-                
+
         else:
             # Pass through all other frames
             await self.push_frame(frame, direction)
+
 
 class TranslationSender(FrameProcessor):
     """
     Handles sending LLM translations to the WebSocket.
     Accumulates streaming chunks into complete sentences before sending.
     """
+
     def __init__(self, websocket):
         super().__init__()
         self.websocket = websocket
@@ -128,57 +162,72 @@ class TranslationSender(FrameProcessor):
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
-        
+
         try:
             # Only handle LLM output frames
             if isinstance(frame, LLMTextFrame):
                 # Accumulate translation chunks
                 if frame.text:
                     self.translation_buffer += frame.text
-                    
+
                     # Check if we have a complete phrase or word boundary
                     # Send more frequently for smoother updates
                     new_text_length = len(self.translation_buffer) - len(self.last_sent)
-                    ends_with_space = self.translation_buffer.endswith(' ')
-                    has_punctuation = self.translation_buffer.rstrip().endswith(('.', '!', '?', ',', ';', ':', '。', '！', '？'))
-                    
-                    if (has_punctuation or 
-                        (ends_with_space and new_text_length > 15) or  # Send at word boundaries after 15 chars
-                        new_text_length > 30):  # Force send after 30 chars
-                        
+                    ends_with_space = self.translation_buffer.endswith(" ")
+                    has_punctuation = self.translation_buffer.rstrip().endswith(
+                        (".", "!", "?", ",", ";", ":", "。", "！", "？")
+                    )
+
+                    if (
+                        has_punctuation
+                        or (
+                            ends_with_space and new_text_length > 15
+                        )  # Send at word boundaries after 15 chars
+                        or new_text_length > 30
+                    ):  # Force send after 30 chars
+
                         # Send only the new portion
-                        new_text = self.translation_buffer[len(self.last_sent):]
+                        new_text = self.translation_buffer[len(self.last_sent) :]
                         if new_text.strip():
-                            await self.websocket.send_json({
-                                "type": "transcript",
-                                "mode": "translation",
-                                "text": new_text,
-                                "is_final": True
-                            })
-                            print(f"[TranslationSender] Sent translation chunk: {new_text[:50]}...")
+                            await self.websocket.send_json(
+                                {
+                                    "type": "transcript",
+                                    "mode": "translation",
+                                    "text": new_text,
+                                    "is_final": True,
+                                }
+                            )
+                            print(
+                                f"[TranslationSender] Sent translation chunk: {new_text[:50]}..."
+                            )
                             self.last_sent = self.translation_buffer
-                            
+
             elif isinstance(frame, LLMFullResponseEndFrame):
                 # Send any remaining buffered translation
                 if len(self.translation_buffer) > len(self.last_sent):
-                    final_text = self.translation_buffer[len(self.last_sent):]
+                    final_text = self.translation_buffer[len(self.last_sent) :]
                     if final_text.strip():
-                    await self.websocket.send_json({
-                        "type": "transcript",
-                        "mode": "translation",
-                            "text": final_text,
-                        "is_final": True
-                    })
-                    print(f"[TranslationSender] Sent final translation: {final_text[:50]}...")
-                
+                        await self.websocket.send_json(
+                            {
+                                "type": "transcript",
+                                "mode": "translation",
+                                "text": final_text,
+                                "is_final": True,
+                            }
+                        )
+                        print(
+                            f"[TranslationSender] Sent final translation: {final_text[:50]}..."
+                        )
+
                 # Reset buffers for next translation
                 self.translation_buffer = ""
                 self.last_sent = ""
 
         except Exception as e:
             print(f"TranslationSender: Failed to send message: {e}")
-        
+
         await self.push_frame(frame, direction)
+
 
 class ContextManager(FrameProcessor):
     """
@@ -186,6 +235,7 @@ class ContextManager(FrameProcessor):
     Resets context to just the system prompt for each user sentence to ensure
     the LLM receives a fresh translation request every time.
     """
+
     def __init__(self, context):
         super().__init__()
         self.context = context
@@ -193,7 +243,7 @@ class ContextManager(FrameProcessor):
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
-        
+
         if isinstance(frame, TranscriptionFrame):
             # Reset context to the original system prompt before sending to LLM
             if self.system_message:
@@ -203,13 +253,14 @@ class ContextManager(FrameProcessor):
 
             # Add user message to context
             self.context.add_message({"role": "user", "content": frame.text})
-            
+
             # Create context frame for the LLM
             context_frame = OpenAILLMContextFrame(self.context)
             await self.push_frame(context_frame, direction)
         else:
             # Pass through all other frames
             await self.push_frame(frame, direction)
+
 
 class FastAPIInputTransport(BaseInputTransport):
     def __init__(self, websocket, params):
@@ -231,13 +282,17 @@ class FastAPIInputTransport(BaseInputTransport):
                 message = await self._websocket.receive_bytes()
                 chunk_count += 1
                 if chunk_count % 50 == 0:  # Log every 50 chunks to avoid spam
-                    print(f"[FastAPIInput] Received {chunk_count} audio chunks (latest: {len(message)} bytes)")
+                    print(
+                        f"[FastAPIInput] Received {chunk_count} audio chunks (latest: {len(message)} bytes)"
+                    )
                 if chunk_count == 1:
-                    print(f"[FastAPIInput] First audio chunk received: {len(message)} bytes")
+                    print(
+                        f"[FastAPIInput] First audio chunk received: {len(message)} bytes"
+                    )
                 frame = InputAudioRawFrame(
-                    audio=message, 
-                    sample_rate=self._params.audio_in_sample_rate, 
-                    num_channels=1
+                    audio=message,
+                    sample_rate=self._params.audio_in_sample_rate,
+                    num_channels=1,
                 )
                 await self.push_frame(frame)
         except Exception as e:
@@ -254,6 +309,7 @@ class FastAPIInputTransport(BaseInputTransport):
                 pass
         await super().stop(frame)
 
+
 class FastAPIOutputTransport(BaseOutputTransport):
     def __init__(self, websocket, params):
         super().__init__(params)
@@ -261,11 +317,22 @@ class FastAPIOutputTransport(BaseOutputTransport):
 
     async def process_frame(self, frame, direction):
         # Filter out frames that we don't need to handle to avoid "not registered" warnings
-        if isinstance(frame, (TextFrame, LLMTextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterruptionFrame, TTSStartedFrame, TTSStoppedFrame)):
+        if isinstance(
+            frame,
+            (
+                TextFrame,
+                LLMTextFrame,
+                LLMFullResponseStartFrame,
+                LLMFullResponseEndFrame,
+                InterruptionFrame,
+                TTSStartedFrame,
+                TTSStoppedFrame,
+            ),
+        ):
             return
 
         await super().process_frame(frame, direction)
-        
+
         # Handle TTS audio frames by converting them to output frames
         if isinstance(frame, TTSAudioRawFrame):
             try:
@@ -280,6 +347,7 @@ class FastAPIOutputTransport(BaseOutputTransport):
             except Exception as e:
                 print(f"[Output] WebSocket Error: {e}")
 
+
 class FastAPITransport(BaseTransport):
     def __init__(self, websocket, params):
         super().__init__()
@@ -292,6 +360,7 @@ class FastAPITransport(BaseTransport):
     def output(self):
         return self._output
 
+
 async def run_translation_bot(websocket_client, reference_id, target_lang):
     """
     Run the translation pipeline with Deepgram STT -> OpenAI Translation -> Fish TTS
@@ -302,7 +371,7 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         params=TransportParams(
             audio_in_sample_rate=16000,  # Deepgram streaming default
             audio_out_sample_rate=24000,  # Fish Audio output
-        )
+        ),
     )
 
     # Deepgram STT Service
@@ -310,7 +379,7 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     if not deepgram_api_key:
         print("[ERROR] DEEPGRAM_API_KEY not found in environment variables!")
         raise ValueError("DEEPGRAM_API_KEY is required")
-    
+
     print(f"[STT] Initializing Deepgram with API key: {deepgram_api_key[:8]}...")
     stt = DeepgramSTTService(
         api_key=deepgram_api_key,
@@ -324,68 +393,68 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         punctuate=True,  # Ensure punctuation is added for sentence detection
     )
     print("[STT] Deepgram STT Service initialized with low latency settings")
-    
+
     # OpenAI LLM Service for Translation - using gpt-4o-mini for fastest response
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
         print("[ERROR] OPENAI_API_KEY not found in environment variables!")
         raise ValueError("OPENAI_API_KEY is required")
-    
+
     print(f"[Translation] Initializing OpenAI with API key: {openai_api_key[:8]}...")
     print(f"[Translation] Target language: {target_lang}")
-    
+
     # Language name mapping for better translation prompt
     lang_names = {
-        'es': 'Spanish',
-        'fr': 'French', 
-        'de': 'German',
-        'ja': 'Japanese',
-        'zh': 'Chinese',
-        'ko': 'Korean',
-        'it': 'Italian',
-        'pt': 'Portuguese',
-        'ru': 'Russian',
-        'ar': 'Arabic',
-        'hi': 'Hindi',
-        'nl': 'Dutch',
-        'pl': 'Polish',
-        'tr': 'Turkish',
-        'vi': 'Vietnamese',
-        'th': 'Thai',
-        'sv': 'Swedish',
-        'da': 'Danish',
-        'no': 'Norwegian',
-        'fi': 'Finnish',
-        'en': 'English'
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "ja": "Japanese",
+        "zh": "Chinese",
+        "ko": "Korean",
+        "it": "Italian",
+        "pt": "Portuguese",
+        "ru": "Russian",
+        "ar": "Arabic",
+        "hi": "Hindi",
+        "nl": "Dutch",
+        "pl": "Polish",
+        "tr": "Turkish",
+        "vi": "Vietnamese",
+        "th": "Thai",
+        "sv": "Swedish",
+        "da": "Danish",
+        "no": "Norwegian",
+        "fi": "Finnish",
+        "en": "English",
     }
     target_lang_name = lang_names.get(target_lang.lower(), target_lang)
-    
+
     # Create LLM context for translation with minimal, focused system prompt
     llm_context = OpenAILLMContext(
         messages=[
             {
                 "role": "system",
-                "content": f"Translate the user's speech to {target_lang_name}. Output ONLY the translation, nothing else. Be concise and natural."
+                "content": f"Translate the user's speech to {target_lang_name}. Output ONLY the translation, nothing else. Be concise and natural.",
             }
         ]
     )
-    
+
     llm_model = "gpt-4o-mini"
     llm = OpenAILLMService(
         api_key=openai_api_key,
         model=llm_model,  # More capable model that follows translation instructions reliably
         params=OpenAILLMService.InputParams(
             max_completion_tokens=100,  # Limit output length for speed
-        )
+        ),
     )
     print(f"[Translation] OpenAI LLM initialized with {llm_model}")
-    
+
     # Fish Audio TTS Service
     fish_api_key = os.getenv("FISH_AUDIO_API_KEY")
     if not fish_api_key:
         print("[ERROR] FISH_AUDIO_API_KEY not found in environment variables!")
         raise ValueError("FISH_AUDIO_API_KEY is required")
-    
+
     print(f"[TTS] Initializing Fish Audio TTS with API key: {fish_api_key[:8]}...")
     print(f"[TTS] Using voice reference ID: {reference_id}")
     tts = FishAudioTTSService(
@@ -401,66 +470,71 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     sentence_aggregator = SentenceAggregator(websocket_client)
     translation_sender = TranslationSender(websocket_client)
     context_manager = ContextManager(llm_context)
-    
+
     # LLMToTTS: Convert LLM text output to TTSTextFrame for Fish Audio
     class LLMToTTS(FrameProcessor):
         """Converts LLM translation output (LLMTextFrame only) to TTSTextFrame"""
+
         def __init__(self):
             super().__init__()
             self.accumulated_text = ""
             self.last_tts_sent = ""
-            
+
         async def process_frame(self, frame, direction):
             await super().process_frame(frame, direction)
-            
+
             # Only accumulate LLM output chunks, NOT TranscriptionFrames
             if isinstance(frame, LLMTextFrame):
                 self.accumulated_text += frame.text
-                
+
                 # Check if we have enough text to send to TTS
                 # Send at natural boundaries (punctuation or word boundaries)
-                new_text = self.accumulated_text[len(self.last_tts_sent):]
-                
+                new_text = self.accumulated_text[len(self.last_tts_sent) :]
+
                 # Send to TTS when we have a complete phrase or sentence
-                if (new_text.rstrip().endswith(('.', '!', '?', ',', ':', ';')) or
-                    (new_text.endswith(' ') and len(new_text) > 20) or
-                    len(new_text) > 40):
-                    
+                if (
+                    new_text.rstrip().endswith((".", "!", "?", ",", ":", ";"))
+                    or (new_text.endswith(" ") and len(new_text) > 20)
+                    or len(new_text) > 40
+                ):
+
                     if new_text.strip():
                         tts_frame = TTSTextFrame(text=new_text.strip())
                         print(f"[LLMToTTS] Sending to TTS: {new_text.strip()[:50]}...")
                         await self.push_frame(tts_frame, direction)
                         self.last_tts_sent = self.accumulated_text
-                        
+
             elif isinstance(frame, LLMFullResponseEndFrame):
                 # Send any remaining text to TTS
-                final_text = self.accumulated_text[len(self.last_tts_sent):]
+                final_text = self.accumulated_text[len(self.last_tts_sent) :]
                 if final_text.strip():
                     tts_frame = TTSTextFrame(text=final_text.strip())
                     print(f"[LLMToTTS] Sending final TTS: {final_text.strip()[:50]}...")
                     await self.push_frame(tts_frame, direction)
-                
-                # Reset for next translation
+
+                    # Reset for next translation
                     self.accumulated_text = ""
                 self.last_tts_sent = ""
                 await self.push_frame(frame, direction)
             else:
                 await self.push_frame(frame, direction)
-    
+
     llm_to_tts = LLMToTTS()
 
-    pipeline = Pipeline([
-        transport.input(),
-        stt,                      # Speech to text
-        sentence_aggregator,      # Buffer and form complete sentences
-        context_manager,          # Manage LLM context (prevent accumulation)
-        llm,                      # Translate with OpenAI gpt-4o-mini
-        translation_sender,       # Send translations to WebSocket
-        llm_to_tts,              # Convert LLM output to TTS format
-        tts,                      # Text to speech
-        transport.output(),       # Send audio back
-    ])
-    
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            stt,  # Speech to text
+            sentence_aggregator,  # Buffer and form complete sentences
+            context_manager,  # Manage LLM context (prevent accumulation)
+            llm,  # Translate with OpenAI gpt-4o-mini
+            translation_sender,  # Send translations to WebSocket
+            llm_to_tts,  # Convert LLM output to TTS format
+            tts,  # Text to speech
+            transport.output(),  # Send audio back
+        ]
+    )
+
     print("[Pipeline] Translation pipeline created with components:")
     print("  1. FastAPI Input Transport")
     print("  2. Deepgram STT")
@@ -478,7 +552,7 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
             allow_interruptions=True,
             enable_metrics=True,
             enable_usage_metrics=True,
-        )
+        ),
     )
-    
+
     await task.run(PipelineTaskParams(loop=asyncio.get_running_loop()))
