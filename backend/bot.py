@@ -5,7 +5,7 @@ from pipecat.pipeline.task import PipelineTask, PipelineParams, PipelineTaskPara
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.fish.tts import FishAudioTTSService
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext, OpenAILLMContextFrame
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
@@ -66,13 +66,12 @@ class SentenceAggregator(FrameProcessor):
                 # Update buffer with latest interim text (replace, don't append)
                 # Deepgram sends progressively longer interim results
                 self.sentence_buffer = text
-
-                # If we detect a sentence ending in interim, treat it as complete
-                if has_punctuation:
-                    print(
-                        f"[SentenceAggregator] Detected sentence end in interim: {self.sentence_buffer[:80]}"
-                    )
-
+                
+                # If we detect a sentence ending in interim AND have meaningful content, treat it as complete
+                # Require at least 10 characters to avoid sending fragments
+                if has_punctuation and len(self.sentence_buffer.strip()) > 10:
+                    print(f"[SentenceAggregator] Detected sentence end in interim: {self.sentence_buffer[:80]}")
+                    
                     # Send FINAL to UI
                     try:
                         await self.websocket.send_json(
@@ -86,7 +85,7 @@ class SentenceAggregator(FrameProcessor):
                     except Exception as e:
                         print(f"[SentenceAggregator] WS Error: {e}")
 
-                    # Send to LLM
+                    # Send to LLM for translation only if substantial
                     new_frame = TranscriptionFrame(
                         text=self.sentence_buffer,
                         user_id=frame.user_id,
@@ -97,10 +96,10 @@ class SentenceAggregator(FrameProcessor):
                     # Clear buffer
                     self.sentence_buffer = ""
                 else:
-                    # Still building - send interim update
-                    print(
-                        f"[SentenceAggregator] Buffering interim: {self.sentence_buffer[:50]}..."
-                    )
+
+                    # Still building - send interim update but don't translate yet
+                    print(f"[SentenceAggregator] Buffering interim: {self.sentence_buffer[:50]}...")
+
                     try:
                         await self.websocket.send_json(
                             {
@@ -147,101 +146,65 @@ class SentenceAggregator(FrameProcessor):
 class TranslationSender(FrameProcessor):
     """
     Handles sending LLM translations to the WebSocket.
+    Accumulates streaming chunks into complete sentences before sending.
     """
 
     def __init__(self, websocket):
         super().__init__()
         self.websocket = websocket
+        self.translation_buffer = ""
+        self.last_sent = ""
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
 
         try:
-            if isinstance(frame, LLMTextFrame) or isinstance(frame, TextFrame):
-                # LLM translations - send to WebSocket
-                # We treat LLM output chunks as final for the UI to append?
-                # Or should we accumulate? For now, existing behavior is to send as final.
-                if frame.text and frame.text.strip():
-                    # Check if translation is actually different from English (basic check)
-                    text_lower = frame.text.lower().strip()
-                    # If it looks like English (starts with common English words), warn
-                    common_english_starters = [
-                        "i ",
-                        "you ",
-                        "the ",
-                        "a ",
-                        "an ",
-                        "but ",
-                        "and ",
-                        "or ",
-                        "in ",
-                        "on ",
-                        "at ",
-                        "to ",
-                        "for ",
-                        "with ",
-                        "have ",
-                        "has ",
-                        "had ",
-                        "was ",
-                        "were ",
-                        "is ",
-                        "are ",
-                        "am ",
-                        "be ",
-                        "been ",
-                        "do ",
-                        "does ",
-                        "did ",
-                        "can ",
-                        "could ",
-                        "will ",
-                        "would ",
-                        "should ",
-                        "may ",
-                        "might ",
-                        "must ",
-                        "this ",
-                        "that ",
-                        "these ",
-                        "those ",
-                        "what ",
-                        "when ",
-                        "where ",
-                        "who ",
-                        "why ",
-                        "how ",
-                        "everyone ",
-                        "everybody ",
-                        "someone ",
-                        "somebody ",
-                        "anyone ",
-                        "anybody ",
-                        "nothing ",
-                        "something ",
-                        "everything ",
-                    ]
-                    is_likely_english = any(
-                        text_lower.startswith(starter)
-                        for starter in common_english_starters
-                    )
 
-                    if is_likely_english and len(text_lower) > 10:
-                        print(
-                            f"[TranslationSender] ⚠️ WARNING: LLM output looks like English, not translation: '{frame.text[:60]}...'"
-                        )
+            # Only handle LLM output frames
+            if isinstance(frame, LLMTextFrame):
+                # Accumulate translation chunks
+                if frame.text:
+                    self.translation_buffer += frame.text
+                    
+                    # Check if we have a complete phrase or word boundary
+                    # Send more frequently for smoother updates
+                    new_text_length = len(self.translation_buffer) - len(self.last_sent)
+                    ends_with_space = self.translation_buffer.endswith(' ')
+                    has_punctuation = self.translation_buffer.rstrip().endswith(('.', '!', '?', ',', ';', ':', '。', '！', '？'))
+                    
+                    if (has_punctuation or 
+                        (ends_with_space and new_text_length > 15) or  # Send at word boundaries after 15 chars
+                        new_text_length > 30):  # Force send after 30 chars
+                        
+                        # Send only the new portion
+                        new_text = self.translation_buffer[len(self.last_sent):]
+                        if new_text.strip():
+                            await self.websocket.send_json({
+                                "type": "transcript",
+                                "mode": "translation",
+                                "text": new_text,
+                                "is_final": True
+                            })
+                            print(f"[TranslationSender] Sent translation chunk: {new_text[:50]}...")
+                            self.last_sent = self.translation_buffer
+                            
+            elif isinstance(frame, LLMFullResponseEndFrame):
+                # Send any remaining buffered translation
+                if len(self.translation_buffer) > len(self.last_sent):
+                    final_text = self.translation_buffer[len(self.last_sent):]
+                    if final_text.strip():
+                    await self.websocket.send_json({
+                        "type": "transcript",
+                        "mode": "translation",
+                            "text": final_text,
+                        "is_final": True
+                    })
+                    print(f"[TranslationSender] Sent final translation: {final_text[:50]}...")
+                
+                # Reset buffers for next translation
+                self.translation_buffer = ""
+                self.last_sent = ""
 
-                    await self.websocket.send_json(
-                        {
-                            "type": "transcript",
-                            "mode": "translation",
-                            "text": frame.text,
-                            "is_final": True,
-                        }
-                    )
-                    print(
-                        f"[TranslationSender] ✅ Sent translation: {frame.text[:50]}..."
-                    )
 
         except Exception as e:
             print(f"TranslationSender: Failed to send message: {e}")
@@ -273,37 +236,39 @@ class TranslationPreprocessor(FrameProcessor):
 
 
 class ContextManager(FrameProcessor):
-    """Manages LLM context to prevent accumulation issues"""
 
-    def __init__(self, context, max_messages=3):
+    """
+    Manages LLM context and converts TranscriptionFrame to OpenAILLMContextFrame.
+    Resets context to just the system prompt for each user sentence to ensure
+    the LLM receives a fresh translation request every time.
+    """
+    def __init__(self, context):
+
         super().__init__()
         self.context = context
-        self.max_messages = max_messages
-        self.message_count = 0
+        self.system_message = context.messages[0] if context.messages else None
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
 
-        # Track messages and periodically clear context (keep only system message)
+        
         if isinstance(frame, TranscriptionFrame):
-            self.message_count += 1
-            print(
-                f"[ContextManager] Received TranscriptionFrame for LLM: '{frame.text[:60]}...' (message #{self.message_count})"
-            )
-            if self.message_count >= self.max_messages:
-                print(
-                    "[ContextManager] Clearing conversation history to prevent accumulation"
-                )
-                # Keep only the system message
-                if hasattr(self.context, "messages") and len(self.context.messages) > 0:
-                    system_msg = self.context.messages[0]  # Keep system prompt
-                    if hasattr(self.context, "set_messages"):
-                        self.context.set_messages([system_msg])
-                    else:
-                        self.context._messages = [system_msg]
-                self.message_count = 0
+            # Reset context to the original system prompt before sending to LLM
+            if self.system_message:
+                self.context.set_messages([self.system_message])
+            else:
+                self.context.set_messages([])
 
-        await self.push_frame(frame, direction)
+            # Add user message to context
+            self.context.add_message({"role": "user", "content": frame.text})
+            
+            # Create context frame for the LLM
+            context_frame = OpenAILLMContextFrame(self.context)
+            await self.push_frame(context_frame, direction)
+        else:
+            # Pass through all other frames
+            await self.push_frame(frame, direction)
+
 
 
 class FastAPIInputTransport(BaseInputTransport):
@@ -407,7 +372,7 @@ class FastAPITransport(BaseTransport):
 
 async def run_translation_bot(websocket_client, reference_id, target_lang):
     """
-    Run the TTS pipeline with Deepgram STT -> Fish TTS (skipping translation for now)
+    Run the translation pipeline with Deepgram STT -> OpenAI Translation -> Fish TTS
     """
     # Custom Transport wrapping FastAPI WebSocket
     transport = FastAPITransport(
@@ -437,6 +402,62 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
         punctuate=True,  # Ensure punctuation is added for sentence detection
     )
     print("[STT] Deepgram STT Service initialized with low latency settings")
+    
+    # OpenAI LLM Service for Translation - using gpt-4o-mini for fastest response
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        print("[ERROR] OPENAI_API_KEY not found in environment variables!")
+        raise ValueError("OPENAI_API_KEY is required")
+    
+    print(f"[Translation] Initializing OpenAI with API key: {openai_api_key[:8]}...")
+    print(f"[Translation] Target language: {target_lang}")
+    
+    # Language name mapping for better translation prompt
+    lang_names = {
+        'es': 'Spanish',
+        'fr': 'French', 
+        'de': 'German',
+        'ja': 'Japanese',
+        'zh': 'Chinese',
+        'ko': 'Korean',
+        'it': 'Italian',
+        'pt': 'Portuguese',
+        'ru': 'Russian',
+        'ar': 'Arabic',
+        'hi': 'Hindi',
+        'nl': 'Dutch',
+        'pl': 'Polish',
+        'tr': 'Turkish',
+        'vi': 'Vietnamese',
+        'th': 'Thai',
+        'sv': 'Swedish',
+        'da': 'Danish',
+        'no': 'Norwegian',
+        'fi': 'Finnish',
+        'en': 'English'
+    }
+    target_lang_name = lang_names.get(target_lang.lower(), target_lang)
+    
+    # Create LLM context for translation with minimal, focused system prompt
+    llm_context = OpenAILLMContext(
+        messages=[
+            {
+                "role": "system",
+                "content": f"Translate the user's speech to {target_lang_name}. Output ONLY the translation, nothing else. Be concise and natural."
+            }
+        ]
+    )
+    
+    llm_model = "gpt-4o-mini"
+    llm = OpenAILLMService(
+        api_key=openai_api_key,
+        model=llm_model,  # More capable model that follows translation instructions reliably
+        params=OpenAILLMService.InputParams(
+            max_completion_tokens=100,  # Limit output length for speed
+        )
+    )
+    print(f"[Translation] OpenAI LLM initialized with {llm_model}")
+    
 
     # Fish Audio TTS Service
     fish_api_key = os.getenv("FISH_AUDIO_API_KEY")
@@ -455,150 +476,80 @@ async def run_translation_bot(websocket_client, reference_id, target_lang):
     )
     print("[TTS] Fish Audio TTS Service initialized with low latency mode")
 
-    # OpenAI LLM Service for Translation
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        print("[ERROR] OPENAI_API_KEY not found in environment variables!")
-        raise ValueError("OPENAI_API_KEY is required")
 
-    # Map language codes to full names for better translation
-    lang_names = {
-        "es": "Spanish",
-        "fr": "French",
-        "de": "German",
-        "ja": "Japanese",
-        "ko": "Korean",
-        "zh": "Chinese",
-        "ar": "Arabic",
-        "en": "English",
-    }
-    target_lang_name = lang_names.get(target_lang.lower(), target_lang)
-
-    print(
-        f"[LLM] Initializing OpenAI LLM for translation to {target_lang_name} ({target_lang})..."
-    )
-    # Create a very explicit system prompt with examples
-    if target_lang.lower() == "es":
-        example_input = "Hello, how are you?"
-        example_output = "Hola, ¿cómo estás?"
-    elif target_lang.lower() == "fr":
-        example_input = "Hello, how are you?"
-        example_output = "Bonjour, comment allez-vous?"
-    elif target_lang.lower() == "de":
-        example_input = "Hello, how are you?"
-        example_output = "Hallo, wie geht es dir?"
-    elif target_lang.lower() == "ja":
-        example_input = "Hello, how are you?"
-        example_output = "こんにちは、元気ですか？"
-    else:
-        example_input = "Hello, how are you?"
-        example_output = f"[Translate to {target_lang_name}]"
-
-    # Create a very explicit system prompt
-    system_prompt = f"""You are a translation API. Translate English text to {target_lang_name}.
-
-IMPORTANT RULES:
-1. You receive English text as input
-2. You MUST respond with ONLY the {target_lang_name} translation
-3. NEVER output the original English text
-4. NEVER add explanations or notes
-5. Output format: ONLY the translated text in {target_lang_name}
-
-Example 1:
-User: "Hello"
-Assistant: "{example_output.split(',')[0] if ',' in example_output else example_output}"
-
-Example 2:
-User: "How are you?"
-Assistant: "{example_output.split(',')[1].strip() if ',' in example_output else example_output}"
-
-Remember: Every user message is English text to translate. Respond ONLY with {target_lang_name} translation."""
-
-    llm_context = OpenAILLMContext(
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            }
-        ]
-    )
-
-    llm = OpenAILLMService(
-        api_key=openai_api_key,
-        model="gpt-4o-mini",  # Fast and cost-effective for translation
-        context=llm_context,
-    )
-    print("[LLM] OpenAI LLM Service initialized for translation")
-
-    # New processors
+    # Processors
     sentence_aggregator = SentenceAggregator(websocket_client)
-    translation_preprocessor = TranslationPreprocessor(target_lang_name)
     translation_sender = TranslationSender(websocket_client)
-    context_manager = ContextManager(llm_context, max_messages=5)
-
-    # Debug processor to log what LLM receives and outputs
-    class LLMDebugProcessor(FrameProcessor):
-        """Debug processor to log LLM input/output"""
-
+    context_manager = ContextManager(llm_context)
+    
+    # LLMToTTS: Convert LLM text output to TTSTextFrame for Fish Audio
+    class LLMToTTS(FrameProcessor):
+        """Converts LLM translation output (LLMTextFrame only) to TTSTextFrame"""
+        def __init__(self):
+            super().__init__()
+            self.accumulated_text = ""
+            self.last_tts_sent = ""
+            
         async def process_frame(self, frame, direction):
             await super().process_frame(frame, direction)
-            if isinstance(frame, TranscriptionFrame):
-                print(
-                    f"[LLMDebug] 📥 LLM INPUT (TranscriptionFrame): '{frame.text[:80]}...'"
-                )
-            elif isinstance(frame, TextFrame):
-                print(f"[LLMDebug] 📥 LLM INPUT (TextFrame): '{frame.text[:80]}...'")
-            elif isinstance(frame, LLMTextFrame):
-                print(f"[LLMDebug] 📤 LLM OUTPUT: '{frame.text[:80]}...'")
-            await self.push_frame(frame, direction)
-
-    llm_debug_input = LLMDebugProcessor()
-    llm_debug_output = LLMDebugProcessor()
-
-    # TranscriptToTTS: Convert LLMTextFrame (translation) to TTSTextFrame for Fish Audio
-    class TranslationToTTS(FrameProcessor):
-        """Converts LLM translation frames to TTSTextFrame for TTS processing"""
-
-        async def process_frame(self, frame, direction):
-            await super().process_frame(frame, direction)
-
+            
+            # Only accumulate LLM output chunks, NOT TranscriptionFrames
             if isinstance(frame, LLMTextFrame):
-                # Convert translation to TTS frame
-                tts_frame = TTSTextFrame(text=frame.text)
-                print(
-                    f"[TranslationToTTS] Converting translation to TTS: {frame.text[:50]}..."
-                )
-                await self.push_frame(tts_frame, direction)
+                self.accumulated_text += frame.text
+                
+                # Check if we have enough text to send to TTS
+                # Send at natural boundaries (punctuation or word boundaries)
+                new_text = self.accumulated_text[len(self.last_tts_sent):]
+                
+                # Send to TTS when we have a complete phrase or sentence
+                if (new_text.rstrip().endswith(('.', '!', '?', ',', ':', ';')) or
+                    (new_text.endswith(' ') and len(new_text) > 20) or
+                    len(new_text) > 40):
+                    
+                    if new_text.strip():
+                        tts_frame = TTSTextFrame(text=new_text.strip())
+                        print(f"[LLMToTTS] Sending to TTS: {new_text.strip()[:50]}...")
+                        await self.push_frame(tts_frame, direction)
+                        self.last_tts_sent = self.accumulated_text
+                        
+            elif isinstance(frame, LLMFullResponseEndFrame):
+                # Send any remaining text to TTS
+                final_text = self.accumulated_text[len(self.last_tts_sent):]
+                if final_text.strip():
+                    tts_frame = TTSTextFrame(text=final_text.strip())
+                    print(f"[LLMToTTS] Sending final TTS: {final_text.strip()[:50]}...")
+                    await self.push_frame(tts_frame, direction)
+                
+                # Reset for next translation
+                    self.accumulated_text = ""
+                self.last_tts_sent = ""
+                await self.push_frame(frame, direction)
             else:
                 await self.push_frame(frame, direction)
+    
+    llm_to_tts = LLMToTTS()
 
-    translation_to_tts = TranslationToTTS()
-
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            sentence_aggregator,  # Buffer and form sentences FIRST
-            translation_preprocessor,  # Preprocess with translation instruction
-            context_manager,  # Manage LLM context to prevent accumulation
-            llm_debug_input,  # Debug: log LLM input
-            llm,  # Translate to target language
-            llm_debug_output,  # Debug: log LLM output
-            translation_sender,  # Send translations to WebSocket
-            translation_to_tts,  # Convert translation to TTS frame
-            tts,  # Generate audio from translation
-            transport.output(),
-        ]
-    )
-
-    print("[Pipeline] Pipeline created with components:")
+    pipeline = Pipeline([
+        transport.input(),
+        stt,                      # Speech to text
+        sentence_aggregator,      # Buffer and form complete sentences
+        context_manager,          # Manage LLM context (prevent accumulation)
+        llm,                      # Translate with OpenAI gpt-4o-mini
+        translation_sender,       # Send translations to WebSocket
+        llm_to_tts,              # Convert LLM output to TTS format
+        tts,                      # Text to speech
+        transport.output(),       # Send audio back
+    ])
+    
+    print("[Pipeline] Translation pipeline created with components:")
     print("  1. FastAPI Input Transport")
     print("  2. Deepgram STT")
-    print("  3. Sentence Aggregator")
-    print("  4. Context Manager")
-    print("  5. OpenAI LLM (Translation)")
-    print("  6. Translation Sender")
-    print("  7. Translation to TTS Converter")
+    print("  3. Sentence Aggregator (sends original transcript)")
+    print("  4. Context Manager (prevents accumulation)")
+    print("  5. OpenAI LLM (gpt-5-nano translation - fastest)")
+    print("  6. Translation Sender (sends translated text)")
+    print("  7. LLM to TTS Converter")
+
     print("  8. Fish Audio TTS")
     print("  9. FastAPI Output Transport")
 
